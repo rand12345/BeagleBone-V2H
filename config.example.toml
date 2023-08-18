@@ -1,0 +1,15 @@
+# rename to config.toml
+
+[mqtt]
+enabled = false
+host = "your-broker-host"
+port = 1883
+client_id = "your-client-id"
+username = "your-username"
+password = "your-password"
+topic = "your/topic"
+sub = "your/cmd_sub"
+interval = 10                # seconds
+
+[meter]
+address = "your-rtu-over-tcp-meter-address:port"
