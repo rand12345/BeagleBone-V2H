@@ -3,10 +3,10 @@ name = "indra_v2h"
 version = "0.0.1"
 edition = "2021"
 authors = ["DG <dgaudie@me.com>"]
-description = "Read CanBus data frames with frame ID matching support"
+description = "Custom Vehicle-to-Home software implementation for the Indra CHAdeMO bidirectional charger"
 
 [profile.release]
-opt-level = "z"
+iopt-level = "z"
 lto = true
 codegen-units = 1
 
