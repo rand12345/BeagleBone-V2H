@@ -1,10 +1,8 @@
+use rumqttc::ClientError;
 use std::net::AddrParseError;
 
-use rumqttc::ClientError;
-// use tokio_socketcan::CANFrame;
-
 #[derive(Debug)]
-pub enum PreError {
+pub enum IndraError {
     Error,
     CanTx(u8),
     BadSlice,
@@ -14,13 +12,12 @@ pub enum PreError {
     MqttSend(ClientError),
     SocketError(AddrParseError),
     SocketConnectError(std::io::Error),
-    // ChannelSend(tokio::sync::mpsc::error::SendError<CANFrame>),
     CanOpen(tokio_socketcan::Error),
 }
-impl std::error::Error for PreError {}
-impl std::fmt::Display for PreError {
+impl std::error::Error for IndraError {}
+impl std::fmt::Display for IndraError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use PreError::*;
+        use IndraError::*;
         match self {
             Error => write!(f, "Invalid data"),
             BadSlice => write!(f, "Bad slice data"),
@@ -31,7 +28,6 @@ impl std::fmt::Display for PreError {
             MqttSend(e) => write!(f, "MQTT send failed {e:?}"),
             SocketError(e) => write!(f, "Meter address parsing failed {e:?}"),
             SocketConnectError(e) => write!(f, "Meter TCP connect failed {e:?}"),
-            // ChannelSend(e) => write!(f, "Channel send failed {e:?}"),
             CanOpen(e) => write!(f, "Can bus open failed {e:?}"),
         }
     }

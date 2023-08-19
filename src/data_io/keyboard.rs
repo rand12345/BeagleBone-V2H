@@ -1,12 +1,10 @@
-use std::io::Read;
-
-use tokio::sync::mpsc::Sender;
-
 use crate::{
     chademo::state::{ChargerState, CHARGING_MODE, STATE},
     log_error,
     pre_charger::pre_commands::PreCmd,
 };
+use std::io::Read;
+use tokio::sync::mpsc::Sender;
 
 pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<ChargerState>) {
     // default to V2H

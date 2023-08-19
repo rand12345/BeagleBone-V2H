@@ -1,4 +1,5 @@
-use crate::error::PreError;
+use super::config::MeterConfig;
+use crate::error::IndraError;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -9,19 +10,17 @@ use tokio::{
     time::{sleep, Duration},
 };
 
-use super::config::MeterConfig;
-
 lazy_static::lazy_static! {
     pub static ref METER: Arc<Mutex<f32>> = Arc::new(Mutex::new(0f32));
 }
 
-pub async fn meter(config: MeterConfig) -> Result<(), PreError> {
+pub async fn meter(config: MeterConfig) -> Result<(), IndraError> {
     log::info!("Starting Meter thread");
     // let config = &APP_CONFIG.clone();s
     let address = config.address.clone();
     let socket_addr: SocketAddr = address
         .parse::<SocketAddr>()
-        .map_err(|e| PreError::SocketError(e))?;
+        .map_err(|e| IndraError::SocketError(e))?;
     log::info!(
         "Connecting to RTU meter: IP:{:?} port:{}",
         socket_addr.ip(),
@@ -29,7 +28,7 @@ pub async fn meter(config: MeterConfig) -> Result<(), PreError> {
     );
     let mut stream = TcpStream::connect(socket_addr)
         .await
-        .map_err(|e| PreError::SocketConnectError(e))?;
+        .map_err(|e| IndraError::SocketConnectError(e))?;
     let (mut rx, mut tx) = stream.split();
 
     // Raw modbus params for SDM230 @ 1hz

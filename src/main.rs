@@ -1,4 +1,3 @@
-// use canbus::mpsc_can;
 use chademo::{
     ev_thread,
     state::{self, ChargerState},
@@ -9,9 +8,7 @@ use tokio::{
     signal::unix::{signal, SignalKind},
     sync::{mpsc, Barrier},
 };
-// use tokio_socketcan::CANFrame;
 
-// mod canbus;
 mod chademo;
 mod data_io;
 mod error;
@@ -26,8 +23,6 @@ const METER_BIAS: f32 = -0.1;
 #[tokio::main]
 async fn main() -> Result<(), &'static str> {
     simple_logger::init_with_level(log::Level::Debug).expect("Logger init failed");
-    // let (tx0sender, tx0reciever) = mpsc::channel::<CANFrame>(10);
-    // let (rx0sender, rx0receiver) = mpsc::channel::<CANFrame>(10);
     let (precmd_sender, precmd_receiver) = mpsc::channel::<PreCmd>(100);
     let (gpiocmd_sender, gpiocmd_receiver) = mpsc::channel::<ChargerState>(100);
 
@@ -57,14 +52,11 @@ async fn main() -> Result<(), &'static str> {
     });
 
     tokio::spawn(state::init_state(gpiocmd_receiver));
-    // tokio::spawn(mpsc_can::can_start("can0", rx0sender, tx0reciever));
     tokio::spawn(meter::meter(app_config.meter.clone())); // rtu over tcp SDM230 modbus meter
 
-    tokio::spawn(pre_thread::init_pre(
+    tokio::spawn(pre_thread::pre_thread(
         "CAN0",
         pre_init_barrier.clone(),
-        // tx0sender,
-        // rx0receiver,
         precmd_receiver,
     ));
     pre_init_barrier.wait().await; // Halts progress until Pre charger initalised

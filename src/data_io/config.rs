@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use serde::Deserialize;
 use std::sync::Arc;
 use std::{fs, panic};

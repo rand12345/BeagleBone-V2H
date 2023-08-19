@@ -1,4 +1,5 @@
 use super::can::X102;
+use crate::{error::IndraError, log_error, pre_charger::pre_thread::PREDATA};
 use lazy_static::lazy_static;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
@@ -15,7 +16,6 @@ lazy_static! {
     pub static ref CHARGING_MODE: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
 }
 
-use crate::{error::PreError, log_error, pre_charger::pre_thread::PREDATA};
 const D1PIN: u64 = PinVal::GPIO_P8_27 as u64; // EV external contactor
 const D2PIN: u64 = PinVal::GPIO_P8_29 as u64; // EV external contactor
 const C1PIN: u64 = PinVal::GPIO_P8_30 as u64; // internal contactor
@@ -24,12 +24,6 @@ const KPIN: u64 = PinVal::GPIO_P9_16 as u64; // input - charge signal sense
 const PLUG_LOCK: u64 = PinVal::GPIO_P8_16 as u64; // Solenoid in CHAdeMO plug
 const MASTERCONTACTOR: u64 = PinVal::GPIO_P8_12 as u64; // lockout
 const PREACPIN: u64 = PinVal::GPIO_P8_28 as u64; // AC contactor in charger
-
-// const SPI1_CS0: u64 = 123; // STPM3x CS
-// const SPI1_CS1: u64 = 7; // AD7327 CS
-// const SPI1_DO: u64 = 121; // MISO
-// const SPI1_DI: u64 = 122; // MOSI
-// const SPI1_CK: u64 = 120; // SCK
 
 #[derive(Default, Clone, Copy)]
 pub struct Chademo {
@@ -124,7 +118,7 @@ impl Chademo {
     }
 }
 
-pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), PreError> {
+pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraError> {
     use ChargerState::*;
 
     log::info!("Starting GPIO thread");
@@ -215,16 +209,9 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), PreError
                 ChargerState::Stage4 => {
                     // Awaiting for EV signal to charge
                     let pre_dc_volts = PREDATA.lock().await.get_dc_output_volts();
-                    // let ev_dc_volts = CARDATA.lock().await.volts;
                     if !(100.0..420.0).contains(&pre_dc_volts) {
                         error!("Bad Pre DC volts {}V - no precharge", pre_dc_volts);
                         received_state
-                    // } else if !(100.0..420.0).contains(&ev_dc_volts) {
-                    //     error!("Bad EV DC volts {}V - no precharge", ev_dc_volts);
-                    //     received_state
-                    // } else if pre_dc_volts as u16 != ev_dc_volts as u16 {
-                    //     log::info!("Contactors can close");
-                    //     received_state
                     } else {
                         received_state
                     }
@@ -321,37 +308,37 @@ pub enum ChargerState {
 #[derive(Debug, Clone, Copy)]
 pub struct State(pub ChargerState);
 
-fn pin_init_out_low(pin: u64) -> Result<Pin, PreError> {
+fn pin_init_out_low(pin: u64) -> Result<Pin, IndraError> {
     let pin_out_low = Pin::new(pin);
     pin_out_low
         .export()
-        .map_err(|_| PreError::PinInitError(pin))?;
+        .map_err(|_| IndraError::PinInitError(pin))?;
     pin_out_low
         .set_direction(sysfs_gpio::Direction::Low)
-        .map_err(|_| PreError::PinInitError(pin))?;
+        .map_err(|_| IndraError::PinInitError(pin))?;
     Ok(pin_out_low)
 }
 
-fn pin_init_input(pin: u64) -> Result<Pin, PreError> {
+fn pin_init_input(pin: u64) -> Result<Pin, IndraError> {
     let pin_input = Pin::new(pin);
     pin_input
         .export()
-        .map_err(|_| PreError::PinInitError(pin))?;
+        .map_err(|_| IndraError::PinInitError(pin))?;
     pin_input
         .set_direction(sysfs_gpio::Direction::In)
-        .map_err(|_| PreError::PinInitError(pin))?;
+        .map_err(|_| IndraError::PinInitError(pin))?;
     Ok(pin_input)
 }
 
-pub fn release_pin(pin_o: Pin) -> Result<(), PreError> {
+pub fn release_pin(pin_o: Pin) -> Result<(), IndraError> {
     let pin = pin_o.get_pin_num();
     pin_o
         .set_value(0)
-        .map_err(|_| PreError::PinInitError(pin))?;
+        .map_err(|_| IndraError::PinInitError(pin))?;
     // Unexport the GPIO pin when done to free resources
     pin_o
         .unexport()
-        .map_err(|_| PreError::PinReleaseError(pin))?;
+        .map_err(|_| IndraError::PinReleaseError(pin))?;
     Ok(())
 }
 

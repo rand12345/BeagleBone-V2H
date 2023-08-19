@@ -1,5 +1,5 @@
 use crate::chademo::state::{Chademo, ChargerState};
-use crate::error::PreError;
+use crate::error::IndraError;
 use crate::log_error;
 use crate::pre_charger::pre_thread::PreCharger;
 use lazy_static::lazy_static;
@@ -45,7 +45,7 @@ impl MqttChademo {
     }
 }
 
-pub async fn mqtt_task(config: MqttConfig) -> Result<(), PreError> {
+pub async fn mqtt_task(config: MqttConfig) -> Result<(), IndraError> {
     use rumqttc::{AsyncClient, MqttOptions, QoS};
 
     log::info!("Starting MQTT thread");
@@ -73,7 +73,7 @@ pub async fn mqtt_task(config: MqttConfig) -> Result<(), PreError> {
     client
         .subscribe(&config.sub, QoS::AtLeastOnce)
         .await
-        .map_err(|e| PreError::MqttSub(e))?;
+        .map_err(|e| IndraError::MqttSub(e))?;
     let interval = config.interval;
     loop {
         sleep(Duration::from_secs(interval.into())).await;
@@ -97,7 +97,7 @@ pub async fn mqtt_task(config: MqttConfig) -> Result<(), PreError> {
                 client_send
                     .publish(topic, QoS::AtLeastOnce, true, msg)
                     .await
-                    .map_err(|e| PreError::MqttSend(e))
+                    .map_err(|e| IndraError::MqttSend(e))
             );
         });
     }

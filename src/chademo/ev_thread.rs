@@ -1,10 +1,8 @@
-#![allow(unused_assignments)]
-
 use crate::chademo::state::STATE;
 use crate::chademo::{can::*, state::Chademo, state::ChargerState};
-use crate::error::PreError;
+use crate::data_io::mqtt::CHADEMO_DATA;
+use crate::error::IndraError;
 use crate::meter::METER;
-use crate::mqtt::CHADEMO_DATA;
 use crate::pre_charger::pre_commands::PreCmd;
 use crate::pre_thread::PREDATA;
 use crate::{log_error, MAX_AMPS, MAX_SOC, METER_BIAS, MIN_SOC};
@@ -18,12 +16,12 @@ use tokio::{sync::mpsc::Sender, time::sleep};
 pub async fn ev100ms(
     send_cmd: Sender<PreCmd>,
     send_state: Sender<ChargerState>,
-) -> Result<(), PreError> {
+) -> Result<(), IndraError> {
     use ChargerState::*;
     use PreCmd::*;
 
     log::info!("Starting EV thread");
-    let mut can = tokio_socketcan::CANSocket::open(&"can1").map_err(|_| PreError::Error)?;
+    let mut can = tokio_socketcan::CANSocket::open(&"can1").map_err(|_| IndraError::Error)?;
     let c_state = STATE.clone();
     let mut chademo = Chademo::default();
 

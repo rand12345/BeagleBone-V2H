@@ -102,3 +102,17 @@ impl From<u8> for Command {
         }
     }
 }
+pub fn cmd_list() -> Vec<u16> {
+    vec![
+        u16::from(Register::Temp),
+        u16::from(Register::AcA),
+        u16::from(Register::DcOutputV),
+        u16::from(Register::DcBusV),
+        u16::from(Register::DcOutputA),
+        u16::from(Register::DcBusMaxVsetpoint),
+        u16::from(Register::DcBusMaxAsetpoint),
+        u16::from(Register::Enabled),
+        // u16::from(Register::Status),
+        u16::from(Register::Ping),
+    ]
+}

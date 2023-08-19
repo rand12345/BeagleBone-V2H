@@ -15,13 +15,12 @@
 //! PWM access under Linux using the PWM sysfs interface
 //!
 //! Modified for Debian Buster /sys
-//! Added duty_cycle() and fixed frequency in new() for simplicity
+//! Added duty_cycle() abstraction and fixed frequency in new()
 
+pub use error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::prelude::*;
 use std::str::FromStr;
-
-pub use error::Error;
 
 #[derive(Debug)]
 pub struct PwmChip {
@@ -127,7 +126,7 @@ impl PwmChip {
 }
 
 impl Pwm {
-    /// Create a new Pwm wiht the provided chip/number
+    /// Create a new Pwm with the provided chip/number
     ///
     /// This function does not export the Pwm pin
     pub fn new(chip: u32, channel: u32, freqency: u32) -> Result<Pwm> {
