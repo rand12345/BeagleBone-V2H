@@ -9,12 +9,12 @@ use tokio::sync::mpsc::Sender;
 
 pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<ChargerState>) {
     // default to V2H
-    {
-        *OPERATIONAL_MODE.clone().lock().await = OperationMode::V2h; // v2h
-        if let Err(e) = gpiocmd_sender2.send(ChargerState::Stage1).await {
-            eprintln!("{e:?}")
-        }
-    }
+    // {
+    //     *OPERATIONAL_MODE.clone().lock().await = OperationMode::V2h; // v2h
+    //     if let Err(e) = gpiocmd_sender2.send(ChargerState::Stage1).await {
+    //         eprintln!("{e:?}")
+    //     }
+    // }
     loop {
         // Input: c for manual charge, d for V2H, s to stop, q to quit (+CR)
         let mut input = [0u8; 2];

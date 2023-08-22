@@ -1,6 +1,7 @@
-use crate::chademo::state::STATE;
+use crate::chademo::state::{OPERATIONAL_MODE, STATE};
 use crate::chademo::{can::*, state::Chademo, state::ChargerState};
 use crate::data_io::mqtt::CHADEMO_DATA;
+use crate::data_io::panel::{ButtonTriggered, Led};
 use crate::error::IndraError;
 use crate::meter::METER;
 use crate::pre_charger::pre_commands::PreCmd;
@@ -10,12 +11,18 @@ use futures_util::StreamExt;
 use log::warn;
 use std::ops::ControlFlow;
 use std::time::Duration;
-use tokio::time::timeout;
-use tokio::{sync::mpsc::Sender, time::sleep};
+use tokio::time::{timeout, Instant};
+use tokio::{
+    sync::mpsc::{Receiver, Sender},
+    time::sleep,
+};
 
 pub async fn ev100ms(
     send_cmd: Sender<PreCmd>,
     send_state: Sender<ChargerState>,
+    mut but_receiver: Receiver<ButtonTriggered>,
+
+    led_sender: Sender<Led>,
 ) -> Result<(), IndraError> {
     use ChargerState::*;
     use PreCmd::*;
@@ -34,13 +41,33 @@ pub async fn ev100ms(
 
     let mut setpoint_amps_old = 0f32;
     let mut setpoint_voltage_old = 0f32;
+
+    let mut ev_connect_timeout: Option<Instant> = None;
     loop {
         // Get current state from main state loop
         let state = { c_state.lock().await.0 };
 
+        match but_receiver.try_recv() {
+            Ok(ButtonTriggered::Boost) => {
+                let mut opm = OPERATIONAL_MODE.lock().await;
+                opm.boost();
+                let _ = send_state.send(state).await;
+            }
+            Ok(ButtonTriggered::OnOff) => {
+                let mut opm = OPERATIONAL_MODE.lock().await;
+                opm.onoff();
+                let _ = send_state.send(state).await;
+            }
+            Err(_) => (),
+        };
+
         match state {
             Idle => {
                 sleep(t100ms).await;
+                if !OPERATIONAL_MODE.lock().await.is_idle() {
+                    // Move on to active modes - V2h or Charge
+                    let _ = send_state.send(Stage1).await;
+                }
                 continue;
             }
             Exiting => {
@@ -66,6 +93,7 @@ pub async fn ev100ms(
         let frame = if let Ok(Some(Ok(frame))) = timeout(t100ms, can.next()).await {
             frame
         } else {
+            // let _ = led_sender.send(Led::SocBar(0)).await;
             continue;
         };
 
@@ -81,6 +109,9 @@ pub async fn ev100ms(
             data.from_chademo(chademo);
         };
 
+        // update LEDs
+        update_panel_leds(&led_sender, &chademo, &state).await;
+
         dbg!(chademo.status_vehicle_contactors());
         dbg!(chademo.fault());
         dbg!(chademo.can_charge());
@@ -90,8 +121,33 @@ pub async fn ev100ms(
             let _ = send_state.send(ChargerState::Exiting).await;
             continue;
         }
-        warn!("State: {:?}", state);
+
+        log::info!("State: {:?}", state);
         match state {
+            GotoIdle => {
+                // shutdown chademo, pre and monitor
+                // send statuschargerstopcontrol
+                let predata = *PREDATA.lock().await;
+                if predata.get_dc_output_amps() > 0.0 {
+                    warn!("Shutdown to idle 1");
+                    x109.charge_halt();
+                } else if x102.status_vehicle_charging && !x102.status_vehicle {
+                    //             matches!(x102.status_vehicle, false); // EV contactors closed
+                    // assert_eq!(x102.status_vehicle_charging, true); // Charge commanded
+                    warn!("Shutdown to idle 2");
+                    x109.charge_stop();
+                } else if !x102.status_vehicle_charging && !x102.status_vehicle {
+                    //             matches!(x102.status_vehicle, false); // EV contactors closed
+                    // assert_eq!(x102.status_vehicle_charging, false); // No charge commanded
+                    warn!("Shutdown to idle 3");
+                } else if !x102.status_vehicle_charging && x102.status_vehicle {
+                    warn!("Shutdown to idle 4 - unlocking plug");
+                    let _ = send_state.send(Idle).await;
+                    x109.plug_lock(false);
+                }
+                send_can_data(&can, &x108, &x109, true).await;
+                continue;
+            }
             Stage1 => {
                 if !PREDATA.lock().await.enabled() {
                     sleep(t100ms).await;
@@ -105,6 +161,13 @@ pub async fn ev100ms(
                 x109.precharge();
                 send_can_data(&can, &x108, &x109, false).await;
                 let _ = send_state.send(ChargerState::Stage1).await;
+                if ev_connect_timeout.is_none() {
+                    ev_connect_timeout = Some(Instant::now())
+                } else if ev_connect_timeout.unwrap().elapsed().as_secs() > 10 {
+                    ev_connect_timeout = None;
+                    log::error!("EV connect timeout");
+                    let _ = send_state.send(ChargerState::Idle).await;
+                }
                 continue;
             }
             Stage2 => {
@@ -192,6 +255,26 @@ pub async fn ev100ms(
     }
 }
 
+async fn update_panel_leds(led_sender: &Sender<Led>, chademo: &Chademo, state: &ChargerState) {
+    let (soc, amps, neg) = if matches!(state, ChargerState::Idle) {
+        (0, 0.0, false) // Remove status bars from led panel
+    } else {
+        (
+            chademo.soc(),
+            chademo.amps(),
+            chademo.amps().is_sign_negative(),
+        )
+    };
+    let _ = led_sender.send(Led::SocBar(soc)).await;
+
+    // convert from float amps to percentage vs max amps const
+    let mut amps: u32 = (amps.abs() as u8).min(MAX_AMPS) as u32 * 100;
+    if amps != 0 {
+        amps /= MAX_AMPS as u32;
+    };
+    let _ = led_sender.send(Led::EnergyBar(amps as u8, neg)).await;
+}
+
 fn v2h_throttle(
     feedback: &mut f32,
     meter: f32,
@@ -253,5 +336,98 @@ async fn send_profile_to_pre(
                 .send(PreCmd::DcVoltsSetpoint(chademo.target_voltage()))
                 .await
         );
+    }
+}
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test1() {
+        let x102: X102 = X102::from([0x2, 0x9A, 0x01, 0x00, 0x0, 0xC8, 0x56, 0x00].as_slice());
+        //         02 9A 01 00 00 C8 56 00    <x102>
+        // 100ms
+        // ControlProtocolNumberEV: 2-
+        // TargetBatteryVoltage: 410V
+        // ChargingCurrentRequest: 0A
+        // FaultBatteryVoltageDeviation: Normal
+        // FaultHighBatteryTemperature: Normal
+        // FaultBatteryCurrentDeviation: Normal
+        // FaultBatteryUndervoltage: Normal
+        // FaultBatteryOvervoltage: Normal
+        // StatusNormalStopRequest: No request
+        // StatusVehicle: EV contactor open or welding detection finished
+        // StatusChargingSystem: Normal
+        // StatusVehicleShifterPosition: Parked
+        // StatusVehicleCharging: Disabled
+        // ChargingRate: 86%
+        assert_eq!(x102.control_protocol_number_ev, 2);
+        assert_eq!(x102.target_battery_voltage, 410.0);
+        assert_eq!(x102.charging_current_request, 0);
+        assert_eq!(x102.fault(), false);
+        assert_eq!(x102.status_vehicle, true); // EV contactors open
+        assert_eq!(x102.status_vehicle_charging, false); // No commanded charge
+    }
+
+    #[test]
+    fn test2() {
+        let x102: X102 = X102::from([0x2, 0x9A, 0x01, 0x00, 0x0, 0xC0, 0x56, 0x00].as_slice());
+
+        //         02 9A 01 00 00 C0 56 00    <x102>
+        // 100ms
+        // ControlProtocolNumberEV: 2-
+        // TargetBatteryVoltage: 410V
+        // ChargingCurrentRequest: 0A
+        // FaultBatteryVoltageDeviation: Normal
+        // FaultHighBatteryTemperature: Normal
+        // FaultBatteryCurrentDeviation: Normal
+        // FaultBatteryUndervoltage: Normal
+        // FaultBatteryOvervoltage: Normal
+        // StatusNormalStopRequest: No request
+        // StatusVehicle: EV contactor closed or during welding detection
+        // StatusChargingSystem: Normal
+        // StatusVehicleShifterPosition: Parked
+        // StatusVehicleCharging: Disabled
+        // ChargingRate: 86%
+        // Charging_close_unknown1: Enabled
+        // Charging_close_unknown2: Enabled
+
+        assert_eq!(x102.control_protocol_number_ev, 2);
+        assert_eq!(x102.target_battery_voltage, 410.0);
+        assert_eq!(x102.charging_current_request, 0);
+        assert_eq!(x102.fault(), false);
+        assert_eq!(x102.status_vehicle, false); // EV contactors closed
+        assert_eq!(x102.status_vehicle_charging, false); // No commanded charge
+    }
+
+    #[test]
+    fn test3() {
+        let x102: X102 = X102::from([0x2, 0x9A, 0x01, 0x00, 0x0, 0xC1, 0x56, 0x00].as_slice());
+
+        //  02 9A 01 0E 00 C1 56 00    <x102>
+        // 100ms
+        // ControlProtocolNumberEV: 2-
+        // TargetBatteryVoltage: 410V
+        // ChargingCurrentRequest: 14A
+        // FaultBatteryVoltageDeviation: Normal
+        // FaultHighBatteryTemperature: Normal
+        // FaultBatteryCurrentDeviation: Normal
+        // FaultBatteryUndervoltage: Normal
+        // FaultBatteryOvervoltage: Normal
+        // StatusNormalStopRequest: No request
+        // StatusVehicle: EV contactor closed or during welding detection
+        // StatusChargingSystem: Normal
+        // StatusVehicleShifterPosition: Parked
+        // StatusVehicleCharging: Enabled
+        // ChargingRate: 86%
+        // Charging_close_unknown1: Enabled
+        // Charging_close_unknown2: Enabled
+
+        assert_eq!(x102.control_protocol_number_ev, 2);
+        assert_eq!(x102.target_battery_voltage, 410.0);
+        assert_eq!(x102.charging_current_request, 0);
+        assert_eq!(x102.fault(), false);
+        assert_eq!(x102.status_vehicle, false); // EV contactors closed
+        assert_eq!(x102.status_vehicle_charging, true); // Charge commanded
     }
 }

@@ -13,6 +13,7 @@ pub enum IndraError {
     SocketError(AddrParseError),
     SocketConnectError(std::io::Error),
     CanOpen(tokio_socketcan::Error),
+    // I2cWriteError,
 }
 impl std::error::Error for IndraError {}
 impl std::fmt::Display for IndraError {
@@ -29,6 +30,7 @@ impl std::fmt::Display for IndraError {
             SocketError(e) => write!(f, "Meter address parsing failed {e:?}"),
             SocketConnectError(e) => write!(f, "Meter TCP connect failed {e:?}"),
             CanOpen(e) => write!(f, "Can bus open failed {e:?}"),
+            // I2cWriteError => write!(f, "I2c write failed"),
         }
     }
 }

@@ -30,4 +30,5 @@ rumqttc = "0.22.0"
 toml = { version = "0.7.6", default-features = false, features = ["parse"] }
 futures = "0"
 tokio-tungstenite = "0.20.0"
-# linux-embedded-hal = "0.3.2"
+linux-embedded-hal = {git = "https://github.com/rust-embedded/linux-embedded-hal.git", features = ["async-tokio"]}
+embedded-hal = "=1.0.0-alpha.10"

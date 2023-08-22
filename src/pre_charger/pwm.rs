@@ -20,7 +20,6 @@
 pub use error::Error;
 use std::fs::{self, File, OpenOptions};
 use std::io::prelude::*;
-use std::str::FromStr;
 
 #[derive(Debug)]
 pub struct PwmChip {
@@ -45,47 +44,54 @@ pub type Result<T> = ::std::result::Result<T, error::Error>;
 
 /// Open the specified entry name as a writable file
 fn pwm_file_wo(chip: &PwmChip, channel: u32, name: &str) -> Result<File> {
-    // /sys/class/pwm/pwmchip7/pwm-7:0
+    log::debug!(
+        "pwm_file_wo => /sys/class/pwm/{}/pwm-{}:{}/",
+        chip.pwm_id,
+        channel,
+        name
+    );
     let f = (OpenOptions::new().write(true).open(format!(
-        "/sys/class/pwm/pwmchip{}/pwm-{}:{}/{}",
-        chip.pwm_id, chip.pwm_id, channel, name
+        "/sys/class/pwm/pwm-{}:{}/{}",
+        chip.pwm_id, channel, name
     )))?;
     Ok(f)
 }
 
 /// Open the specified entry name as a readable file
-#[allow(dead_code)]
-fn pwm_file_ro(chip: &PwmChip, channel: u32, name: &str) -> Result<File> {
-    let f = File::open(format!(
-        "/sys/class/pwm/pwmchip{}/pwm-{}:{}/{}",
-        chip.pwm_id, chip.pwm_id, channel, name
-    ))?;
-    Ok(f)
-}
+// #[allow(dead_code)]
+// fn pwm_file_ro(chip: &PwmChip, channel: u32, name: &str) -> Result<File> {
+//     let f = File::open(format!(
+//         "/sys/class/pwm/{}/pwm-{}:{}/",
+//         chip.pwm_id, channel, name
+//     ))?;
+//     Ok(f)
+// }
 
 /// Get the u32 value from the given entry
-#[allow(dead_code)]
-fn pwm_file_parse<T: FromStr>(chip: &PwmChip, channel: u32, name: &str) -> Result<T> {
-    let mut s = String::with_capacity(10);
-    let mut f = pwm_file_ro(chip, channel, name)?;
-    f.read_to_string(&mut s)?;
-    match s.trim().parse::<T>() {
-        Ok(r) => Ok(r),
-        Err(_) => Err(Error::Unexpected(format!(
-            "Unexpected value in file contents: {:?}",
-            s
-        ))),
-    }
-}
+// #[allow(dead_code)]
+// fn pwm_file_parse<T: FromStr>(chip: &PwmChip, channel: u32, name: &str) -> Result<T> {
+//     let mut s = String::with_capacity(10);
+//     let mut f = pwm_file_ro(chip, channel, name)?;
+//     f.read_to_string(&mut s)?;
+//     match s.trim().parse::<T>() {
+//         Ok(r) => Ok(r),
+//         Err(_) => Err(Error::Unexpected(format!(
+//             "Unexpected value in file contents: {:?}",
+//             s
+//         ))),
+//     }
+// }
 
 impl PwmChip {
     pub fn new(number: u32) -> Result<PwmChip> {
+        log::debug!("Fan new PWM => /sys/class/pwm/pwmchip{}", number);
         fs::metadata(&format!("/sys/class/pwm/pwmchip{}", number))?;
         Ok(PwmChip { pwm_id: number })
     }
 
     #[allow(dead_code)]
     pub fn count(&self) -> Result<u32> {
+        log::debug!("count => /sys/class/pwm/pwmchip{}/npwm", self.pwm_id);
         let npwm_path = format!("/sys/class/pwm/pwmchip{}/npwm", self.pwm_id);
         let mut npwm_file = File::open(&npwm_path)?;
         let mut s = String::new();
@@ -101,10 +107,17 @@ impl PwmChip {
 
     pub fn export(&self, channel: u32) -> Result<()> {
         // only export if not already exported
+        log::debug!(
+            "Export => /sys/class/pwm/pwmchip{}/pwm-{}:{}",
+            self.pwm_id,
+            self.pwm_id,
+            channel
+        );
         if let Err(_) = fs::metadata(&format!(
             "/sys/class/pwm/pwmchip{}/pwm-{}:{}",
             self.pwm_id, self.pwm_id, channel
         )) {
+            log::debug!("Export 2 => /sys/class/pwm/pwmchip{}/export", self.pwm_id);
             let path = format!("/sys/class/pwm/pwmchip{}/export", self.pwm_id);
             let mut export_file = File::create(&path)?;
             let _ = export_file.write_all(format!("{}", channel).as_bytes());

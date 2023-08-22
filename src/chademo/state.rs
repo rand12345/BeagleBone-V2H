@@ -1,12 +1,18 @@
 use super::can::X102;
-use crate::{api::OperationMode, error::IndraError, log_error, pre_charger::pre_thread::PREDATA};
+use crate::{
+    api::OperationMode, data_io::panel::Led, error::IndraError, log_error,
+    pre_charger::pre_thread::PREDATA,
+};
 use lazy_static::lazy_static;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
 use std::{sync::Arc, time::Duration};
 use sysfs_gpio::Pin;
 use tokio::{
-    sync::{mpsc::Receiver, Mutex},
+    sync::{
+        mpsc::{Receiver, Sender},
+        Mutex,
+    },
     time::sleep,
 };
 
@@ -22,11 +28,12 @@ const D2PIN: u64 = PinVal::GPIO_P8_29 as u64; // EV external contactor
 const C1PIN: u64 = PinVal::GPIO_P8_30 as u64; // internal contactor
 const C2PIN: u64 = PinVal::GPIO_P8_32 as u64; // internal contactor
 const KPIN: u64 = PinVal::GPIO_P9_16 as u64; // input - charge signal sense
-const ONOFFPIN: u64 = PinVal::GPIO_P9_23 as u64; // input - front panel, low = pressed
-const BOOSTPIN: u64 = PinVal::GPIO_P9_25 as u64; // input - front panel, low = pressed
+pub(crate) const ONOFFPIN: u64 = PinVal::GPIO_P9_23 as u64; // input - front panel, low = pressed
+pub(crate) const BOOSTPIN: u64 = PinVal::GPIO_P9_25 as u64; // input - front panel, low = pressed
+pub(crate) const RESETPCAPIN: u64 = PinVal::GPIO_P8_31 as u64; // input - front panel, low = pressed
 const PLUG_LOCK: u64 = PinVal::GPIO_P8_16 as u64; // Solenoid in CHAdeMO plug
-const MASTERCONTACTOR: u64 = PinVal::GPIO_P8_12 as u64; // lockout
-const PREACPIN: u64 = PinVal::GPIO_P8_28 as u64; // AC contactor in charger
+pub(crate) const MASTERCONTACTOR: u64 = PinVal::GPIO_P8_12 as u64; // lockout
+pub(crate) const PREACPIN: u64 = PinVal::GPIO_P8_28 as u64; // AC contactor in charger
 
 #[derive(Default, Clone, Copy)]
 pub struct Chademo {
@@ -121,7 +128,10 @@ impl Chademo {
     }
 }
 
-pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraError> {
+pub async fn init_state(
+    receiver: Receiver<ChargerState>,
+    led_sender: Sender<Led>,
+) -> Result<(), IndraError> {
     use ChargerState::*;
 
     log::info!("Starting GPIO thread");
@@ -133,12 +143,14 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
     let c2pin = pin_init_out_low(C2PIN)?;
     let kpin = pin_init_input(KPIN)?;
     let pluglock = pin_init_out_low(PLUG_LOCK)?;
-    let masterpin = pin_init_out_low(MASTERCONTACTOR)?;
-    let pre_ac_contactor = pin_init_out_low(PREACPIN)?;
+    // let masterpin = pin_init_out_low(MASTERCONTACTOR)?;
+    // let pre_ac_contactor = pin_init_out_low(PREACPIN)?;
+    // let pca9552_reset = pin_init_out_high(RESETPCAPIN)?;
     let mut exiting = false;
     let c_state = STATE.clone();
-    log_error!("Enable master pin", masterpin.set_value(1));
-    log_error!("Energise PRE charger", pre_ac_contactor.set_value(1));
+
+    // log_error!("Enable master pin", masterpin.set_value(1));
+    // log_error!("Energise PRE charger", pre_ac_contactor.set_value(1));
 
     loop {
         if let Some(received_state) = receiver.recv().await {
@@ -149,14 +161,29 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
                     log_error!("idle d2", d2pin.set_value(0));
                     log_error!("idle c1", c1pin.set_value(0));
                     log_error!("idle c2", c2pin.set_value(0));
-                    log_error!("idle plug lock", pluglock.set_value(0));
+                    // log_error!("idle plug lock", pluglock.set_value(0));
+                    let _ = led_sender
+                        .send(Led::Logo(crate::data_io::panel::State::Idle))
+                        .await;
 
                     //spin
                     received_state
                 }
+                ChargerState::GotoIdle => {
+                    // shutdown, and if safe then unlock plug and goto idle
+
+                    if matches!(pluglock.get_value(), Ok(0)) {
+                        OPERATIONAL_MODE.lock().await.idle();
+                        ChargerState::Idle
+                    } else {
+                        warn!("Waiting for plug unlock state before idle");
+                        received_state
+                    }
+                }
                 ChargerState::Exiting => {
                     if !exiting {
                         exiting = true;
+
                         received_state
                     } else {
                         warn!("CTRL-C");
@@ -164,12 +191,20 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
                         log_error!("shutdown c1", c1pin.set_value(0));
                         log_error!("shutdown d2", d2pin.set_value(0));
                         log_error!("shutdown d1", d1pin.set_value(0));
-                        log_error!("shutdown Pre", pre_ac_contactor.set_value(0));
-                        log_error!("shutdown Master", pre_ac_contactor.set_value(0));
+                        // log_error!("shutdown Pre", pre_ac_contactor.set_value(0));
+                        // log_error!("shutdown Master", pre_ac_contactor.set_value(0));
                         sleep(Duration::from_secs(1)).await;
-
                         log_error!("idle plug lock", pluglock.set_value(0));
+                        while let Ok(1) = pluglock.get_value() {
+                            sleep(Duration::from_millis(100)).await;
+                            warn!("Waititng for plug lock to open");
+                        }
+                        let _ = led_sender
+                            .send(Led::Logo(crate::data_io::panel::State::Off))
+                            .await;
                         sleep(Duration::from_millis(500)).await;
+                        // log_error!("shutdown LEDs", pca9552_reset.set_value(0));
+
                         std::process::exit(0);
                     }
                 }
@@ -245,20 +280,31 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
                     let pre_dc_amps = { PREDATA.lock().await.get_dc_output_amps() };
                     let charging_mode = *OPERATIONAL_MODE.clone().lock().await;
                     log::debug!("Charging mode {charging_mode:?} in {received_state:?}");
-                    if pre_dc_amps as u16 != 0 && matches!(charging_mode, OperationMode::V2h) {
+                    if matches!(charging_mode, OperationMode::Idle) {
+                        GotoIdle
+                    } else if pre_dc_amps as u16 != 0 && matches!(charging_mode, OperationMode::V2h)
+                    {
                         Stage7
                     } else {
-                        warn!("                                       Charging mode");
+                        // warn!("                                       Charging mode");
+                        let _ = led_sender
+                            .send(Led::Logo(crate::data_io::panel::State::Charging))
+                            .await;
                         Stage6
                     }
                 }
                 ChargerState::Stage7 => {
                     let charging_mode = *OPERATIONAL_MODE.clone().lock().await;
                     log::debug!("Charging mode {charging_mode:?} in {received_state:?}");
-                    if matches!(charging_mode, OperationMode::Charge) {
+                    if matches!(charging_mode, OperationMode::Idle) {
+                        GotoIdle
+                    } else if matches!(charging_mode, OperationMode::Charge) {
                         Stage6
                     } else {
-                        warn!("                                       V2H mode");
+                        // warn!("                                       V2H mode");
+                        let _ = led_sender
+                            .send(Led::Logo(crate::data_io::panel::State::V2h))
+                            .await;
                         Stage7
                     }
                 }
@@ -266,12 +312,15 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
                 ChargerState::Panic => {
                     // Open contactors, end can bus communitations
                     // Print debug info and sys-exit with error
+                    let _ = led_sender
+                        .send(Led::Logo(crate::data_io::panel::State::Error))
+                        .await;
                     log_error!("shutdown c2", release_pin(c2pin));
                     log_error!("shutdown c1", release_pin(c1pin));
                     log_error!("shutdown d2", release_pin(d2pin));
                     log_error!("shutdown d1", release_pin(d1pin));
-                    log_error!("shutdown Pre", pre_ac_contactor.set_value(0));
-                    log_error!("shutdown Master", pre_ac_contactor.set_value(0));
+                    // log_error!("shutdown Pre", pre_ac_contactor.set_value(0));
+                    // log_error!("shutdown Master", pre_ac_contactor.set_value(0));
                     sleep(Duration::from_secs(1)).await;
 
                     log_error!("shutdown plug lock", pluglock.set_value(0));
@@ -287,10 +336,12 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
 #[derive(Default, PartialEq, PartialOrd, Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum ChargerState {
     /// All open, no can tx, pre idle
+    #[default]
     Idle,
+    /// Halt activity
+    GotoIdle,
     /// Reset state and unexport pins
     Exiting,
-    #[default]
     ///D1 close & Lock plug (tbc)
     Stage1,
     ///K0 detected
@@ -305,19 +356,30 @@ pub enum ChargerState {
     Stage6,
     /// V2H
     Stage7,
+    /// Leaves with error led (red)
     Panic,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct State(pub ChargerState);
 
-fn pin_init_out_low(pin: u64) -> Result<Pin, IndraError> {
+pub fn pin_init_out_low(pin: u64) -> Result<Pin, IndraError> {
     let pin_out_low = Pin::new(pin);
     pin_out_low
         .export()
         .map_err(|_| IndraError::PinInitError(pin))?;
     pin_out_low
         .set_direction(sysfs_gpio::Direction::Low)
+        .map_err(|_| IndraError::PinInitError(pin))?;
+    Ok(pin_out_low)
+}
+pub fn pin_init_out_high(pin: u64) -> Result<Pin, IndraError> {
+    let pin_out_low = Pin::new(pin);
+    pin_out_low
+        .export()
+        .map_err(|_| IndraError::PinInitError(pin))?;
+    pin_out_low
+        .set_direction(sysfs_gpio::Direction::High)
         .map_err(|_| IndraError::PinInitError(pin))?;
     Ok(pin_out_low)
 }

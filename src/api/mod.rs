@@ -6,10 +6,7 @@ use futures_util::{future, StreamExt, TryStreamExt};
 use log::info;
 use serde::{Deserialize, Serialize};
 use std::io::Error;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    sync::TryLockError,
-};
+use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
 pub async fn run() -> Result<(), Error> {
@@ -48,7 +45,11 @@ async fn accept_connection(stream: TcpStream) {
             match serde_json::from_str::<Instruction>(&cmd) {
                 Ok(d) => match d.cmd {
                     Cmd::SetMode(mode) => {
-                        let _ = mode.action();
+                        // !!!
+                        if let Ok(mut opm) = OPERATIONAL_MODE.try_lock() {
+                            *opm = mode;
+                            log::info!("Mode instruction {:?}", mode)
+                        };
                         let response = Response::Mode(mode);
                         Ok(Message::Text(serde_json::to_string(&response).unwrap()))
                     }
@@ -96,14 +97,36 @@ enum Response {
 
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
 pub enum OperationMode {
-    #[default]
     V2h,
     Charge,
+    #[default]
     Idle,
 }
 impl OperationMode {
-    pub fn action(&self) -> Result<(), TryLockError> {
-        *OPERATIONAL_MODE.try_lock()? = *self;
-        Ok(())
+    // pub fn action(&self) -> Result<(), TryLockError> {
+    //     *OPERATIONAL_MODE.try_lock()? = *self;
+    //     Ok(())
+    // }
+    pub fn boost(&mut self) {
+        use OperationMode::*;
+        *self = match self {
+            V2h | Idle => Charge,
+            Charge => V2h,
+        }
+    }
+    pub fn onoff(&mut self) {
+        use OperationMode::*;
+        *self = match self {
+            V2h | Charge => Idle,
+            Idle => V2h,
+        }
+    }
+    pub fn idle(&mut self) {
+        use OperationMode::*;
+        *self = Idle;
+    }
+    pub fn is_idle(&self) -> bool {
+        use OperationMode::*;
+        matches!(self, Idle)
     }
 }

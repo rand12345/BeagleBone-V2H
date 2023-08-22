@@ -169,10 +169,13 @@ impl X109 {
         self.status_station(false);
         self.plug_lock(true);
     }
+    pub(crate) fn charge_halt(&mut self) {
+        self.status_charger_stop_control(true);
+    }
     pub(crate) fn charge_stop(&mut self) {
         self.status_charger_stop_control(true);
         self.status_station(false);
-        self.plug_lock(false);
+        // self.plug_lock(false);
         self.output_voltage = 0.0;
         self.output_current = 0.0;
         self.remaining_charging_time_10s_bit = 0;

@@ -87,7 +87,7 @@ pub async fn mqtt_task(config: MqttConfig) -> Result<(), IndraError> {
             }
         };
         let topic = config.topic.clone();
-        info!("Sending {}={msg}", &topic);
+        info!("Sending: {}={msg}", &topic);
 
         // spawn to avoid latency spikes
         let client_send = client.clone();

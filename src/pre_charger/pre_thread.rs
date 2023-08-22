@@ -16,7 +16,7 @@ lazy_static! {
     pub static ref PREDATA: Arc<Mutex<PreCharger>> = Arc::new(Mutex::new(PreCharger::default()));
 }
 
-const BB_PWM_CHIP: u32 = 7;
+const BB_PWM_CHIP: u32 = 0;
 const BB_PWM_NUMBER: u32 = 0;
 
 #[derive(Default, Clone, Copy, Debug)]
@@ -174,7 +174,11 @@ pub async fn pre_thread(
         }
 
         // set heatsink fan PWM
-        fan.update(pre.temp);
+        if pre.enabled() || (pre.temp() > 55.0 && !pre.enabled()) {
+            fan.update(pre.temp);
+        } else {
+            fan.update(10.0);
+        }
 
         while instant.elapsed().as_millis().le(&89) {
             if let Ok(Some(cmd)) = timeout(Duration::from_millis(10), pre_cmd.recv()).await {
@@ -185,9 +189,6 @@ pub async fn pre_thread(
                         *PREDATA.clone().lock().await = pre; //copy data
                     }
                 };
-                if matches!(cmd, PreCmd::Disable) {
-                    fan.disable()
-                }
             };
         }
         {

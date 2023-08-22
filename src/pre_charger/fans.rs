@@ -3,7 +3,7 @@ use crate::log_error;
 use std::time::Duration;
 use tokio::time::Instant;
 
-#[derive(Default, Copy, Clone)]
+#[derive(Default, Copy, Clone, Debug)]
 struct Duty {
     val: u8,
     duration: Option<Instant>,
@@ -30,6 +30,7 @@ impl Into<u8> for Duty {
     }
 }
 
+#[derive(Debug)]
 pub struct Fan {
     duty: Duty,
     pwm: Pwm,
@@ -52,6 +53,7 @@ impl Fan {
             pwm,
         }
     }
+    #[allow(dead_code)]
     pub fn disable(&mut self) {
         log_error!("PWM disable", self.pwm.enable(false));
         log_error!("PWM unexport", self.pwm.unexport());
@@ -66,7 +68,10 @@ impl Fan {
                 return;
             }
             self.duty = Duty::new(temp_to_duty(temp)); // pwm noise below 20%??
-        }
+            if let Err(e) = self.pwm.set_duty(self.duty.val) {
+                log::error!("Duty update error {e}")
+            }
+        };
     }
 }
 
