@@ -1,5 +1,5 @@
 use super::can::X102;
-use crate::{error::IndraError, log_error, pre_charger::pre_thread::PREDATA};
+use crate::{api::OperationMode, error::IndraError, log_error, pre_charger::pre_thread::PREDATA};
 use lazy_static::lazy_static;
 use log::{error, warn};
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,8 @@ use tokio::{
 lazy_static! {
     pub static ref STATE: Arc<Mutex<State>> = Arc::new(Mutex::new(State(ChargerState::Idle)));
     pub static ref CHADEMO: Arc<Mutex<Chademo>> = Arc::new(Mutex::new(Chademo::default()));
-    pub static ref CHARGING_MODE: Arc<Mutex<bool>> = Arc::new(Mutex::new(false));
+    pub static ref OPERATIONAL_MODE: Arc<Mutex<OperationMode>> =
+        Arc::new(Mutex::new(OperationMode::default()));
 }
 
 const D1PIN: u64 = PinVal::GPIO_P8_27 as u64; // EV external contactor
@@ -21,6 +22,8 @@ const D2PIN: u64 = PinVal::GPIO_P8_29 as u64; // EV external contactor
 const C1PIN: u64 = PinVal::GPIO_P8_30 as u64; // internal contactor
 const C2PIN: u64 = PinVal::GPIO_P8_32 as u64; // internal contactor
 const KPIN: u64 = PinVal::GPIO_P9_16 as u64; // input - charge signal sense
+const ONOFFPIN: u64 = PinVal::GPIO_P9_23 as u64; // input - front panel, low = pressed
+const BOOSTPIN: u64 = PinVal::GPIO_P9_25 as u64; // input - front panel, low = pressed
 const PLUG_LOCK: u64 = PinVal::GPIO_P8_16 as u64; // Solenoid in CHAdeMO plug
 const MASTERCONTACTOR: u64 = PinVal::GPIO_P8_12 as u64; // lockout
 const PREACPIN: u64 = PinVal::GPIO_P8_28 as u64; // AC contactor in charger
@@ -240,9 +243,9 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
                 }
                 ChargerState::Stage6 => {
                     let pre_dc_amps = { PREDATA.lock().await.get_dc_output_amps() };
-                    let charging_mode = *CHARGING_MODE.clone().lock().await;
-                    log::debug!("Charging mode {charging_mode} in {received_state:?}");
-                    if pre_dc_amps as u16 != 0 && !charging_mode {
+                    let charging_mode = *OPERATIONAL_MODE.clone().lock().await;
+                    log::debug!("Charging mode {charging_mode:?} in {received_state:?}");
+                    if pre_dc_amps as u16 != 0 && matches!(charging_mode, OperationMode::V2h) {
                         Stage7
                     } else {
                         warn!("                                       Charging mode");
@@ -250,9 +253,9 @@ pub async fn init_state(receiver: Receiver<ChargerState>) -> Result<(), IndraErr
                     }
                 }
                 ChargerState::Stage7 => {
-                    let charging_mode = *CHARGING_MODE.clone().lock().await;
-                    log::debug!("Charging mode {charging_mode} in {received_state:?}");
-                    if charging_mode {
+                    let charging_mode = *OPERATIONAL_MODE.clone().lock().await;
+                    log::debug!("Charging mode {charging_mode:?} in {received_state:?}");
+                    if matches!(charging_mode, OperationMode::Charge) {
                         Stage6
                     } else {
                         warn!("                                       V2H mode");

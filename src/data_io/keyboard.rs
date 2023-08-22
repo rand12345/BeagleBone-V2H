@@ -1,5 +1,6 @@
 use crate::{
-    chademo::state::{ChargerState, CHARGING_MODE, STATE},
+    api::OperationMode,
+    chademo::state::{ChargerState, OPERATIONAL_MODE, STATE},
     log_error,
     pre_charger::pre_commands::PreCmd,
 };
@@ -9,7 +10,7 @@ use tokio::sync::mpsc::Sender;
 pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<ChargerState>) {
     // default to V2H
     {
-        *CHARGING_MODE.clone().lock().await = false; // v2h
+        *OPERATIONAL_MODE.clone().lock().await = OperationMode::V2h; // v2h
         if let Err(e) = gpiocmd_sender2.send(ChargerState::Stage1).await {
             eprintln!("{e:?}")
         }
@@ -29,6 +30,8 @@ pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<C
         match input[0] {
             115 => {
                 // "s" stop
+
+                *OPERATIONAL_MODE.clone().lock().await = OperationMode::Idle;
                 log_error!("kb", precmd_sender1.send(PreCmd::Disable).await);
                 if let Err(e) = gpiocmd_sender2.send(ChargerState::Idle).await {
                     eprintln!("{e:?}")
@@ -36,7 +39,7 @@ pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<C
             }
             100 => {
                 // "d" V2H (default)
-                *CHARGING_MODE.clone().lock().await = false;
+                *OPERATIONAL_MODE.clone().lock().await = OperationMode::V2h;
                 if matches!(STATE.lock().await.0, ChargerState::Idle) {
                     if let Err(e) = gpiocmd_sender2.send(ChargerState::Stage1).await {
                         eprintln!("{e:?}")
@@ -49,7 +52,7 @@ pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<C
             }
             99 => {
                 // "c" manual charge
-                *CHARGING_MODE.clone().lock().await = true;
+                *OPERATIONAL_MODE.clone().lock().await = OperationMode::Charge;
                 if matches!(STATE.lock().await.0, ChargerState::Idle) {
                     if let Err(e) = gpiocmd_sender2.send(ChargerState::Stage1).await {
                         eprintln!("{e:?}")

@@ -10,16 +10,16 @@ struct Duty {
 }
 
 impl Duty {
-    pub fn new() -> Duty {
+    pub fn new(val: u8) -> Duty {
         Duty {
-            val: 0,
+            val,
             duration: Some(Instant::now()),
         }
     }
     /// Returns true if time > duration
     fn elapsed(&self, time: Duration) -> bool {
         match self.duration {
-            None => false,
+            None => true,
             Some(t) => t.elapsed().cmp(&time).is_gt(),
         }
     }
@@ -58,33 +58,25 @@ impl Fan {
     }
     pub fn update(&mut self, temp: f32) {
         let elapsed = self.duty.elapsed(Duration::from_secs(20));
-        let new_duty = Duty {
-            val: self.temp_to_duty(temp),
-            duration: None,
-        };
+        let new_duty = Duty::new(temp_to_duty(temp));
 
         if self.duty.val != new_duty.val {
             if self.duty.val > new_duty.val && !elapsed {
                 // falling -> overrun fan for 20 seconds
                 return;
             }
-            self.duty = if new_duty.val < 20 {
-                Duty::new()
-            } else {
-                new_duty
-            }; // pwm noise below 20%
-            log_error!("Set pwm", self.pwm.set_duty(self.duty.into()));
+            self.duty = Duty::new(temp_to_duty(temp)); // pwm noise below 20%??
         }
     }
+}
 
-    fn temp_to_duty(&self, value: impl Into<f32>) -> u8 {
-        // specify voltage range against fsd soc
-        const CELL100: f32 = 60.0;
-        const CELL0: f32 = 35.0;
+fn temp_to_duty(value: impl Into<f32>) -> u8 {
+    // specify voltage range against fsd soc
+    const CELL100: f32 = 60.0;
+    const CELL0: f32 = 35.0;
 
-        let old_range = CELL100 - CELL0;
-        let new_range = 100.0 - 0.1;
-        let value: f32 = value.into();
-        (((((value - CELL0) * new_range) / old_range) + 0.1) as u8).min(100)
-    }
+    let old_range = CELL100 - CELL0;
+    let new_range = 100.0 - 0.1;
+    let value: f32 = value.into();
+    (((((value - CELL0) * new_range) / old_range) + 0.1) as u8).min(100)
 }

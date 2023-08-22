@@ -9,6 +9,7 @@ use tokio::{
     sync::{mpsc, Barrier},
 };
 
+mod api;
 mod chademo;
 mod data_io;
 mod error;
@@ -20,9 +21,35 @@ const MIN_SOC: u8 = 30;
 const MAX_AMPS: u8 = 15;
 const METER_BIAS: f32 = -0.1;
 
+/**
+ *
+ * Todo:
+ *      API
+ *          Add GetParams and return error with message (add to JS)
+ *          Access config (write to disk on save)
+ *          JS not updating DOM ???
+ *
+ *      Fans
+ *          Not working ???
+ *          Check with scope
+ *
+ *      Scheduler (new)
+ *          Sched charge from time window - web ui
+ *          TZ aware!
+ *          Charge to SoC optional limiter
+ *
+ *      Config
+ *          Min/max V2H SoC - web ui
+ *
+ *      eStop
+ *          Detect input pin?
+ *
+ */
+
 #[tokio::main]
 async fn main() -> Result<(), &'static str> {
     simple_logger::init_with_level(log::Level::Debug).expect("Logger init failed");
+
     let (precmd_sender, precmd_receiver) = mpsc::channel::<PreCmd>(100);
     let (gpiocmd_sender, gpiocmd_receiver) = mpsc::channel::<ChargerState>(100);
 
@@ -66,6 +93,7 @@ async fn main() -> Result<(), &'static str> {
         gpiocmd_sender.clone(),
     ));
     tokio::spawn(mqtt::mqtt_task(app_config.mqtt.clone()));
+    tokio::spawn(api::run());
 
     // temp keyboard interface (never returns)
 

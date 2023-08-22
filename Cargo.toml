@@ -11,11 +11,12 @@ lto = true
 codegen-units = 1
 
 [dependencies]
+tokio = { version = "1", features = ["full"] }
+#"sync", "signal", "rt-multi-thread"]
+futures-util = { version = "0", default-features = false }
+tokio-socketcan = "0"
 # libbeaglebone = { version = "0.5.0", default-features = false } # SPI?
 # spidev = "0.5.2"
-tokio-socketcan = "0"
-tokio = { version = "1", features = ["sync", "signal", "rt-multi-thread"] }
-futures-util = { version = "0", default-features = false }
 # anyhow = "1.0"
 sysfs_gpio = { version = "0.6.1", features = ["async-tokio"] }
 serde = { version = "1.0.183", default-features = false, features = [
@@ -27,3 +28,6 @@ lazy_static = "1.4.0"
 serde_json = "1.0.104"
 rumqttc = "0.22.0"
 toml = { version = "0.7.6", default-features = false, features = ["parse"] }
+futures = "0"
+tokio-tungstenite = "0.20.0"
+# linux-embedded-hal = "0.3.2"
