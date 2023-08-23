@@ -1,11 +1,12 @@
 use crate::{
     chademo::state::OPERATIONAL_MODE,
     data_io::mqtt::{MqttChademo, CHADEMO_DATA},
+    MAX_AMPS,
 };
 use futures_util::{future, StreamExt, TryStreamExt};
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::io::Error;
+use std::{io::Error, ops::Deref};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
 
@@ -47,7 +48,7 @@ async fn accept_connection(stream: TcpStream) {
                     Cmd::SetMode(mode) => {
                         // !!!
                         if let Ok(mut opm) = OPERATIONAL_MODE.try_lock() {
-                            *opm = mode;
+                            *opm = mode.clone();
                             log::info!("Mode instruction {:?}", mode)
                         };
                         let response = Response::Mode(mode);
@@ -89,35 +90,92 @@ enum Cmd {
 struct Instruction {
     cmd: Cmd,
 }
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Debug)]
 enum Response {
     Data(MqttChademo),
     Mode(OperationMode),
 }
 
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
+#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
+pub struct ChargeParameters {
+    amps: u8,
+    eco: bool,
+    soc_limit: Option<u8>,
+}
+
+impl ChargeParameters {
+    fn amps(&mut self, limit: u8) -> Self {
+        self.amps = limit;
+        *self.deref()
+    }
+    fn eco(&mut self, enabled: bool) -> Self {
+        self.eco = enabled;
+        *self.deref()
+    }
+    fn soc_limit(&mut self, soc_limit: u8) -> Self {
+        self.soc_limit = Some(soc_limit);
+        *self.deref()
+    }
+}
+impl Default for ChargeParameters {
+    fn default() -> Self {
+        Self {
+            amps: MAX_AMPS,
+            eco: false,
+            soc_limit: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub enum OperationMode {
     V2h,
-    Charge,
+    Charge(ChargeParameters),
     #[default]
     Idle,
 }
 impl OperationMode {
-    // pub fn action(&self) -> Result<(), TryLockError> {
-    //     *OPERATIONAL_MODE.try_lock()? = *self;
-    //     Ok(())
-    // }
+    pub fn eco_charge(&mut self, enabled: bool) {
+        let cp = ChargeParameters::default().eco(enabled);
+        *self = Self::Charge(cp)
+    }
+    pub fn limit_soc(&mut self, limit: u8) {
+        let cp = ChargeParameters::default().soc_limit(limit);
+        *self = Self::Charge(cp)
+    }
+    pub fn limit_amps(&mut self, limit: u8) {
+        let cp = ChargeParameters::default().amps(limit);
+        *self = Self::Charge(cp)
+    }
+    pub fn is_eco(&self) -> bool {
+        match self {
+            OperationMode::Charge(p) => p.eco,
+            _ => false,
+        }
+    }
+    pub fn soc_limit(&self) -> Option<u8> {
+        match self {
+            OperationMode::Charge(p) => p.soc_limit,
+            _ => None,
+        }
+    }
+    pub fn amps_limit(&self) -> u8 {
+        match self {
+            OperationMode::Charge(p) => p.amps,
+            _ => 0,
+        }
+    }
     pub fn boost(&mut self) {
         use OperationMode::*;
         *self = match self {
-            V2h | Idle => Charge,
-            Charge => V2h,
+            V2h | Idle => Charge(ChargeParameters::default()),
+            Charge(_) => V2h,
         }
     }
     pub fn onoff(&mut self) {
         use OperationMode::*;
         *self = match self {
-            V2h | Charge => Idle,
+            V2h | Charge(_) => Idle,
             Idle => V2h,
         }
     }
@@ -128,5 +186,13 @@ impl OperationMode {
     pub fn is_idle(&self) -> bool {
         use OperationMode::*;
         matches!(self, Idle)
+    }
+    pub fn is_charge(&self) -> bool {
+        use OperationMode::*;
+        matches!(self, Charge(_))
+    }
+    pub fn is_v2h(&self) -> bool {
+        use OperationMode::*;
+        matches!(self, Charge(_))
     }
 }

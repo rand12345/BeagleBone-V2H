@@ -1,5 +1,5 @@
 use crate::{
-    api::OperationMode,
+    api::{OperationMode, ChargeParameters},
     chademo::state::{ChargerState, OPERATIONAL_MODE, STATE},
     log_error,
     pre_charger::pre_commands::PreCmd,
@@ -52,7 +52,7 @@ pub async fn scan_kb(precmd_sender1: &Sender<PreCmd>, gpiocmd_sender2: &Sender<C
             }
             99 => {
                 // "c" manual charge
-                *OPERATIONAL_MODE.clone().lock().await = OperationMode::Charge;
+                *OPERATIONAL_MODE.clone().lock().await = OperationMode::Charge(ChargeParameters::default());
                 if matches!(STATE.lock().await.0, ChargerState::Idle) {
                     if let Err(e) = gpiocmd_sender2.send(ChargerState::Stage1).await {
                         eprintln!("{e:?}")

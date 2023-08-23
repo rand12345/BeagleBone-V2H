@@ -30,6 +30,7 @@ pub struct PreCharger {
     dc_output_amps_setpoint: f32,
     dc_bus_volts: f32,
     enabled: bool,
+    fan_duty: u8,
     status: [u8; 2],
 }
 
@@ -42,13 +43,14 @@ impl std::fmt::Display for PreCharger {
         };
         write!(
             f,
-            "PRE: {sign} {:.2}W, temp: {:.2}ªC dc_output: {:.2}V {:.2}A, dc_output_setpoint: {:.2}V {:.2}A, enabled: {}",
+            "PRE: {sign} {:.2}W, temp: {:.2}ªC dc_output: {:.2}V {:.2}A, dc_output_setpoint: {:.2}V {:.2}A, fan: {} enabled: {}",
             self.dc_output_amps * self.dc_output_volts,
             self.temp,
             self.dc_output_volts,
             self.dc_output_amps,
             self.dc_output_volts_setpoint,
             self.dc_output_amps_setpoint,
+            self.fan_duty,
             self.enabled
         )
     }
@@ -126,6 +128,9 @@ impl PreCharger {
     pub fn get_dc_output_amps(&self) -> f32 {
         self.dc_output_amps
     }
+    pub fn get_fan_percentage(&self) -> u8 {
+        self.fan_duty
+    }
     pub fn enabled(&self) -> bool {
         self.enabled
     }
@@ -174,10 +179,11 @@ pub async fn pre_thread(
         }
 
         // set heatsink fan PWM
-        if pre.enabled() || (pre.temp() > 55.0 && !pre.enabled()) {
-            fan.update(pre.temp);
+        if pre.enabled() || pre.temp() > 55.0 {
+            pre.fan_duty = fan.update(pre.temp);
         } else {
             fan.update(10.0);
+            pre.fan_duty = fan.update(10.0);
         }
 
         while instant.elapsed().as_millis().le(&89) {

@@ -5,7 +5,7 @@ use crate::{
 };
 use lazy_static::lazy_static;
 use log::{error, warn};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use std::{sync::Arc, time::Duration};
 use sysfs_gpio::Pin;
 use tokio::{
@@ -48,7 +48,7 @@ pub struct Chademo {
     state: ChargerState,
 }
 
-#[allow(dead_code)]
+// #[allow(dead_code)]
 impl Chademo {
     pub fn soc_to_voltage(&mut self) {
         assert!(self.soc() <= 100, "soc > 100%");
@@ -149,6 +149,8 @@ pub async fn init_state(
     let mut exiting = false;
     let c_state = STATE.clone();
 
+    let charging_mode = OPERATIONAL_MODE.clone();
+
     // log_error!("Enable master pin", masterpin.set_value(1));
     // log_error!("Energise PRE charger", pre_ac_contactor.set_value(1));
 
@@ -161,7 +163,7 @@ pub async fn init_state(
                     log_error!("idle d2", d2pin.set_value(0));
                     log_error!("idle c1", c1pin.set_value(0));
                     log_error!("idle c2", c2pin.set_value(0));
-                    // log_error!("idle plug lock", pluglock.set_value(0));
+                    log_error!("idle plug lock", pluglock.set_value(0));
                     let _ = led_sender
                         .send(Led::Logo(crate::data_io::panel::State::Idle))
                         .await;
@@ -173,7 +175,7 @@ pub async fn init_state(
                     // shutdown, and if safe then unlock plug and goto idle
 
                     if matches!(pluglock.get_value(), Ok(0)) {
-                        OPERATIONAL_MODE.lock().await.idle();
+                        charging_mode.lock().await.idle();
                         ChargerState::Idle
                     } else {
                         warn!("Waiting for plug unlock state before idle");
@@ -278,12 +280,11 @@ pub async fn init_state(
                 }
                 ChargerState::Stage6 => {
                     let pre_dc_amps = { PREDATA.lock().await.get_dc_output_amps() };
-                    let charging_mode = *OPERATIONAL_MODE.clone().lock().await;
+                    let charging_mode = charging_mode.lock().await;
                     log::debug!("Charging mode {charging_mode:?} in {received_state:?}");
-                    if matches!(charging_mode, OperationMode::Idle) {
+                    if charging_mode.is_idle() {
                         GotoIdle
-                    } else if pre_dc_amps as u16 != 0 && matches!(charging_mode, OperationMode::V2h)
-                    {
+                    } else if pre_dc_amps as u16 != 0 && charging_mode.is_v2h() {
                         Stage7
                     } else {
                         // warn!("                                       Charging mode");
@@ -294,11 +295,11 @@ pub async fn init_state(
                     }
                 }
                 ChargerState::Stage7 => {
-                    let charging_mode = *OPERATIONAL_MODE.clone().lock().await;
                     log::debug!("Charging mode {charging_mode:?} in {received_state:?}");
-                    if matches!(charging_mode, OperationMode::Idle) {
+                    let charging_mode = charging_mode.lock().await;
+                    if charging_mode.is_idle() {
                         GotoIdle
-                    } else if matches!(charging_mode, OperationMode::Charge) {
+                    } else if charging_mode.is_charge() {
                         Stage6
                     } else {
                         // warn!("                                       V2H mode");
@@ -333,7 +334,7 @@ pub async fn init_state(
     }
 }
 
-#[derive(Default, PartialEq, PartialOrd, Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Default, Debug, Copy, Clone, Serialize)]
 pub enum ChargerState {
     /// All open, no can tx, pre idle
     #[default]

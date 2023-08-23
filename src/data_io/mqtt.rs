@@ -18,7 +18,7 @@ lazy_static! {
         Arc::new(Mutex::new(MqttChademo::default()));
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize, Default, Debug)]
+#[derive(Clone, Copy, Serialize, Default, Debug)]
 pub struct MqttChademo {
     pub ac_w: f32,
     pub soc: f32,
@@ -27,6 +27,7 @@ pub struct MqttChademo {
     pub amps: f32,
     pub state: ChargerState,
     pub requested_amps: f32,
+    pub fan: u8,
 }
 
 impl MqttChademo {
@@ -35,6 +36,7 @@ impl MqttChademo {
         self.temp = pre.temp();
         self.volts = pre.get_dc_output_volts();
         self.amps = pre.get_dc_output_amps();
+        self.fan = pre.get_fan_percentage();
         self
     }
     pub fn from_chademo(&mut self, chademo: Chademo) -> &mut Self {

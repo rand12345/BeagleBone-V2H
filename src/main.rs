@@ -16,6 +16,7 @@ mod data_io;
 mod error;
 mod macros;
 mod pre_charger;
+mod scheduler;
 
 const MAX_SOC: u8 = 100;
 const MIN_SOC: u8 = 30;
@@ -31,6 +32,9 @@ const METER_BIAS: f32 = -0.1;
  *          JS not updating DOM ???
  *
  *      Scheduler (new)
+ *          TOML done
+ *
+ *          needs eventbus tokio::broadcast
  *          Sched charge from time window - web ui
  *          TZ aware!
  *          Charge to SoC optional limiter

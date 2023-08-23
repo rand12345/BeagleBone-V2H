@@ -43,18 +43,19 @@ pub async fn ev100ms(
     let mut setpoint_voltage_old = 0f32;
 
     let mut ev_connect_timeout: Option<Instant> = None;
+    let operational_mode = OPERATIONAL_MODE.clone();
     loop {
         // Get current state from main state loop
         let state = { c_state.lock().await.0 };
 
         match but_receiver.try_recv() {
             Ok(ButtonTriggered::Boost) => {
-                let mut opm = OPERATIONAL_MODE.lock().await;
+                let mut opm = operational_mode.lock().await;
                 opm.boost();
                 let _ = send_state.send(state).await;
             }
             Ok(ButtonTriggered::OnOff) => {
-                let mut opm = OPERATIONAL_MODE.lock().await;
+                let mut opm = operational_mode.lock().await;
                 opm.onoff();
                 let _ = send_state.send(state).await;
             }
@@ -64,7 +65,7 @@ pub async fn ev100ms(
         match state {
             Idle => {
                 sleep(t100ms).await;
-                if !OPERATIONAL_MODE.lock().await.is_idle() {
+                if !operational_mode.lock().await.is_idle() {
                     // Move on to active modes - V2h or Charge
                     let _ = send_state.send(Stage1).await;
                 }
@@ -93,7 +94,6 @@ pub async fn ev100ms(
         let frame = if let Ok(Some(Ok(frame))) = timeout(t100ms, can.next()).await {
             frame
         } else {
-            // let _ = led_sender.send(Led::SocBar(0)).await;
             continue;
         };
 
@@ -166,7 +166,7 @@ pub async fn ev100ms(
                 } else if ev_connect_timeout.unwrap().elapsed().as_secs() > 10 {
                     ev_connect_timeout = None;
                     log::error!("EV connect timeout");
-                    let _ = send_state.send(ChargerState::Idle).await;
+                    let _ = send_state.send(ChargerState::GotoIdle).await;
                 }
                 continue;
             }
@@ -236,6 +236,9 @@ pub async fn ev100ms(
                     v2h_throttle(&mut feedback, meter, setpoint_amps_old, x109, chademo)
                 } else {
                     // Stage 6
+                    if chademo.soc() >= MAX_SOC || chademo.track_ev_amps() < 5.0 {
+                        *operational_mode.lock().await = crate::api::OperationMode::Idle;
+                    };
                     chademo.track_ev_amps()
                 };
 

@@ -53,30 +53,40 @@ impl Fan {
             pwm,
         }
     }
+    pub fn stop(&mut self) {
+        let _ = self.pwm.set_duty(1);
+        log_error!("PWM disable", self.pwm.enable(false));
+    }
     #[allow(dead_code)]
-    pub fn disable(&mut self) {
+    pub fn remove(&mut self) {
         log_error!("PWM disable", self.pwm.enable(false));
         log_error!("PWM unexport", self.pwm.unexport());
     }
-    pub fn update(&mut self, temp: f32) {
+    pub fn update(&mut self, temp: f32) -> u8 {
         let elapsed = self.duty.elapsed(Duration::from_secs(20));
         let new_duty = Duty::new(temp_to_duty(temp));
 
         if self.duty.val != new_duty.val {
             if self.duty.val > new_duty.val && !elapsed {
                 // falling -> overrun fan for 20 seconds
-                return;
+                return self.duty.val;
             }
-            self.duty = Duty::new(temp_to_duty(temp)); // pwm noise below 20%??
-            if let Err(e) = self.pwm.set_duty(self.duty.val) {
-                log::error!("Duty update error {e}")
+
+            self.duty = new_duty; // pwm noise below 20%??
+            if self.duty.val < 20 {
+                self.stop()
+            } else {
+                log_error!("PWM enable", self.pwm.enable(true));
+                if let Err(e) = self.pwm.set_duty(self.duty.val) {
+                    log::error!("Duty update error {e}")
+                }
             }
         };
+        self.duty.val
     }
 }
 
 fn temp_to_duty(value: impl Into<f32>) -> u8 {
-    // specify voltage range against fsd soc
     const CELL100: f32 = 60.0;
     const CELL0: f32 = 35.0;
 
