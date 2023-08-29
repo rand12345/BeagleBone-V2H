@@ -1,35 +1,20 @@
-[package]
-name = "indra_v2h"
-version = "0.0.1"
-edition = "2021"
-authors = ["DG <dgaudie@me.com>"]
-description = "Custom Vehicle-to-Home software implementation for the Indra CHAdeMO bidirectional charger"
+[workspace]
+resolver="2" 
+
+members = ["indra_beaglebone",
+"chademo_v2"]
+
+[profile.dev]
+codegen-units = 1
+debug = 2
+debug-assertions = true 
+incremental = false
+opt-level = 1         
+overflow-checks = true  
 
 [profile.release]
 iopt-level = "z"
-lto = "fat"
+# lto = "fat"
 codegen-units = 1
-
-[dependencies]
-tokio = { version = "1", features = ["sync", "signal", "rt-multi-thread"] }
-
-futures-util = { version = "0", default-features = false }
-tokio-socketcan = "0"
-# libbeaglebone = { version = "0.5.0", default-features = false } # SPI?
-# spidev = "0.5.2"
-sysfs_gpio = { version = "0.6.1", features = ["async-tokio"] }
-serde = { version = "1.0.183", default-features = false, features = [
-    "serde_derive",
-] }
-log = "0.4.19"
-simple_logger = "4.2.0"
-lazy_static = "1.4.0"
-serde_json = "1.0.104"
-rumqttc = "0.22.0"
-toml = { version = "0.7.6", default-features = false, features = ["parse", "display"] }
-futures = "0"
-tokio-tungstenite = "0.20.0"
-linux-embedded-hal = {git = "https://github.com/rust-embedded/linux-embedded-hal.git", features = ["async-tokio"]}
-embedded-hal = "=1.0.0-alpha.10"
-chrono = {version = "0.4.26", features = ["serde"]}
-chrono-tz = {version = "0.8.3", features = ["serde"]}
+[patch.crates-io]
+chademo_v2 = {path = "chademo_v2"}
