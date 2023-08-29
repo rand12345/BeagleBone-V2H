@@ -64,7 +64,7 @@ async fn accept_connection(stream: TcpStream, events_tx: EventsTx, mode_tx: Chad
         process_ws_message(&cmd, data, &events_tx, &mode_tx)
     };
 
-    // {"cmd": {"SetMode": {"Charge": {"amps": 15, "eco": false, "soc_limit": 100}}}}
+    // {"cmd": {"SetMode": {"Charge": {"amps": 15, "eco": "", "soc_limit": 100}}}}
     // {"cmd": {"SetMode": "V2h"}}
     // {"cmd": {"SetMode": "Idle"}}
     // {"cmd": "GetJson"}
