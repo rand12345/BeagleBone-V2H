@@ -1,4 +1,5 @@
 use crate::{
+    chademo::state::CHADEMO,
     data_io::mqtt::{MqttChademo, CHADEMO_DATA},
     global_state::OperationMode,
     log_error,
@@ -8,9 +9,12 @@ use crate::{
 use futures_util::{future, StreamExt, TryStreamExt};
 use log::info;
 use serde::{Deserialize, Serialize};
-use std::{io::Error, str::FromStr};
-use tokio::net::{TcpListener, TcpStream};
-use tokio_tungstenite::tungstenite::Message;
+use std::{io::Error, str::FromStr, time::Duration};
+use tokio::{
+    net::{TcpListener, TcpStream},
+    time::sleep,
+};
+use tokio_tungstenite::tungstenite::{self, Message};
 
 const BAD_ACK: &str = r#"{"ack": "err"}"#; // temp, use error handling
 
@@ -45,7 +49,6 @@ async fn accept_connection(stream: TcpStream, events_tx: EventsTx, mode_tx: Chad
 
     use tokio_tungstenite::tungstenite::Error;
 
-    let data = { *CHADEMO_DATA.lock().await };
     let process_incoming_ws = |msg: Result<Message, Error>| -> Result<Message, Error> {
         let cmd = match msg {
             Ok(Message::Text(cmd)) => {
@@ -61,7 +64,7 @@ async fn accept_connection(stream: TcpStream, events_tx: EventsTx, mode_tx: Chad
                 return Err(Error::Utf8);
             }
         };
-        process_ws_message(&cmd, data, &events_tx, &mode_tx)
+        process_ws_message(&cmd, &events_tx, &mode_tx)
     };
 
     // {"cmd": {"SetMode": {"Charge": {"amps": 15, "eco": "", "soc_limit": 100}}}}
@@ -98,10 +101,9 @@ async fn accept_connection(stream: TcpStream, events_tx: EventsTx, mode_tx: Chad
 /// Cannot be async
 fn process_ws_message(
     cmd: &str,
-    data: MqttChademo,
     events_tx: &EventsTx,
     mode_tx: &ChademoTx,
-) -> Result<Message, tokio_tungstenite::tungstenite::Error> {
+) -> Result<Message, tungstenite::Error> {
     match serde_json::from_str::<Instruction>(&cmd) {
         Ok(d) => match d.cmd {
             Cmd::SetMode(mode) => {
@@ -113,50 +115,115 @@ fn process_ws_message(
                     )
                 });
                 let response = Response::Mode(mode);
+                log::info!("SetMode => Client {:?}", response);
                 Ok(Message::Text(serde_json::to_string(&response).unwrap()))
             }
             Cmd::GetMode => {
-                let mode = CHADEMO.clone().lock().await;
-                let json_mode: &str = serde_json::to_string(*mode.get_state()).try_into();
-                let response = Response::Data(data);
-                Ok(Message::Text(serde_json::to_string(&response).unwrap()))
-            }
-            Cmd::GetData => {
-                let response = Response::Data(data);
-                Ok(Message::Text(serde_json::to_string(&response).unwrap()))
-            }
-            Cmd::SetEvents(events) => {
-                let val = match toml::Value::from_str(&events) {
-                    Ok(val) => val,
-                    Err(_) => return Ok(Message::Text(BAD_ACK.to_owned())),
+                let mode = match CHADEMO.clone().try_lock() {
+                    Ok(mode) => *mode.state(),
+                    Err(_) => return Err(tungstenite::Error::Utf8),
                 };
 
-                match val.try_into::<Events>() {
-                    Ok(nv) => {
-                        if let Err(e) = events_tx.blocking_send(nv) {
-                            log::error!("{e:?}");
-                            return Ok(Message::Text(BAD_ACK.to_owned()));
-                        };
-                        Ok(Message::Text(events))
-                    }
-                    Err(_) => return Ok(Message::Text(BAD_ACK.to_owned())),
-                }
+                let response = Response::Mode(mode);
+                log::info!("GetMode => Client {:?}", response);
+                Ok(Message::Text(serde_json::to_string(&response).unwrap()))
             }
-            Cmd::GetEvents => match get_eventfile_sync() {
-                Some(events_json) => Ok(Message::Text(events_json)),
-                None => return Ok(Message::Text(BAD_ACK.to_owned())),
+            Cmd::GetData => match CHADEMO_DATA.clone().try_lock() {
+                Ok(d) => {
+                    let response = Response::Data(*d);
+                    Ok(Message::Text(serde_json::to_string(&response).unwrap()))
+                }
+                Err(_) => Ok(Message::Text(BAD_ACK.to_string())),
             },
+            Cmd::SetEvents(events) => {
+                log::info!("SetEvents <= Client {:?}", events);
+                let events_tx_c = events_tx.clone();
+                let handle = tokio::task::spawn_blocking(move || events_tx_c.blocking_send(events));
+                // if handle.is_finished() {
+                while !handle.is_finished() {
+                    // dangerous loop
+                }
+                Ok(Message::Text(r#"{"ack": "ok"}"#.to_string()))
+            }
+            Cmd::GetEvents => {
+                let events = match get_eventfile_sync() {
+                    Ok(events) => events,
+                    Err(_) => return Ok(Message::Text(BAD_ACK.to_owned())),
+                };
+                let response = Response::Events(events);
+                log::info!("GetEvents => Client {:?}", response);
+                Ok(Message::Text(serde_json::to_string(&response).unwrap()))
+            }
         },
-        Err(_) => Ok(Message::Text(BAD_ACK.to_owned())),
+        Err(e) => {
+            log::error!("Could not deserialise Instruction {cmd} - {e:?}");
+            Ok(Message::Text(BAD_ACK.to_owned()))
+        }
     }
 }
 
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test() {
+        let cmd: &str = r#"{
+  "cmd": {
+    "SetEvents": [
+      {
+        "time": "01:02:03",
+        "action": "Sleep"
+      },
+      {
+        "time": "02:03:03",
+        "action": "Sleep"
+      }
+    ]
+  }
+}"#;
+        // let cmd: &str = r#"{"cmd":"GetEvents"}"#;
+        // let events = Events::default();
+        // let _cmd = Cmd::SetEvents(events);
+        // let a = Instruction { cmd: _cmd };
+        // let json: String = serde_json::to_string(&a).unwrap();
+        // println!("Outout: {json}");
+
+        let _result = match serde_json::from_str::<Instruction>(&cmd) {
+            Ok(d) => match d.cmd {
+                Cmd::GetEvents => {
+                    let events = match get_eventfile_sync() {
+                        Ok(events) => events,
+                        Err(e) => {
+                            panic!("1Could not deserialise Instruction {cmd:?} {e:?}")
+                        }
+                    };
+                    let response = Response::Events(events);
+                    log::info!("GetEvents => Client {:?}", response);
+                    let output = serde_json::to_string(&response).unwrap();
+                    println!("GetEvents test {output}")
+                }
+                Cmd::SetEvents(events) => {
+                    println!("SetEvents <= Client {:?}", events);
+                }
+                _ => {
+                    println!("2Could not deserialise Instruction {cmd}");
+                }
+            },
+            _ => {
+                println!("3Could not deserialise Instruction {cmd}");
+            }
+        };
+
+        // result
+    }
+}
 #[derive(Serialize, Deserialize, Debug, Default)]
 enum Cmd {
     SetMode(OperationMode),
+    GetMode,
     #[default]
     GetData,
-    SetEvents(String),
+    SetEvents(Events),
     GetEvents,
 }
 
@@ -168,4 +235,5 @@ struct Instruction {
 enum Response {
     Data(MqttChademo),
     Mode(OperationMode),
+    Events(Events),
 }

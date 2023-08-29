@@ -1,23 +1,14 @@
-use crate::{
-    data_io::panel::LedCommand,
-    error::IndraError,
-    global_state::OperationMode,
-    log_error,
-    pre_charger::{pre_thread::init, PreCommand, PREDATA},
-    statics::*,
-    MAX_AMPS,
-};
-use chademo_v2::chademo::*;
+use crate::{error::IndraError, global_state::OperationMode, MAX_AMPS};
+use chademo_v2::*;
 use lazy_static::lazy_static;
 use log::warn;
 use serde::Serialize;
-use std::{arch::x86_64::_CMP_FALSE_OS, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 use sysfs_gpio::Pin;
 use tokio::{sync::Mutex, time::sleep};
 use tokio_socketcan::CANFrame;
 
 lazy_static! {
-    // pub static ref STATE: Arc<Mutex<State>> = Arc::new(Mutex::new(State(ChargerState::Idle)));
     pub static ref CHADEMO: Arc<Mutex<Chademo>> = Arc::new(Mutex::new(Chademo::new()));
 }
 
@@ -73,6 +64,7 @@ pub struct Chademo {
     pub x102: X102,
     pub x108: X108,
     pub x109: X109,
+    pub x200: X200,
     pub x208: X208,
     pub x209: X209,
     state: OperationMode,
@@ -85,7 +77,7 @@ impl std::fmt::Display for Chademo {
         let x109 = format!("{}", self.x109_status());
         write!(
             f,
-            "x102: status {}\nx109: status {}\nd1:{:?} d2:{:?} k:{:?}, c1:{:?}, c2:{:?}, plug:{:?}, pre:{:?}",
+            "x102: status {}\nx109: status {}\nd1:{:?} d2:{:?} k:{:?}, c1:{:?}, c2:{:?}, plug:{:?}, pre:{:?}\nV2x: Max Dis: (-{}A {}%) Chg: {}A (Currently {}A)",
             x102,
             x109,
             self.pins.d1.get_value(),
@@ -94,7 +86,11 @@ impl std::fmt::Display for Chademo {
             self.pins.c1.get_value(),
             self.pins.c2.get_value(),
             self.pins.pluglock.get_value(),
-            self.pins.pre_ac.get_value()
+            self.pins.pre_ac.get_value(),
+            self.requested_discharging_amps(),
+            self.max_remaining_capacity_for_charging(),
+            self.requested_charging_amps(),
+            self.amps
         )
     }
 }
@@ -107,19 +103,22 @@ impl Chademo {
             x100: X100::default(),
             x101: X101::default(),
             x102: X102::default(),
+            x200: X200::default(),
             //EVSE encode
-            x109: X109::new(3, true),
-            x108: X108::new(MAX_AMPS, 500, true, 435).into(),
-            x208: X208::new(0, 500, -1 * MAX_AMPS as i16, 250),
+            x109: X109::new(2, true),
+            x108: X108::new(MAX_AMPS, 500, false, 435).into(),
+            x208: X208::new(0, 500, MAX_AMPS, 250),
             x209: X209::new(2, 0),
             state: OperationMode::Uninitalised,
             amps: 0,
         }
     }
+
+    /// Reports Pre current to EV, both charge and discharge
     pub fn update_amps(&mut self, amps: impl Into<i16>) {
         self.amps = amps.into();
         (self.x208.discharge_current, self.x109.output_current) = match self.amps.is_negative() {
-            true => ((0xff + (self.amps).clamp(-15, 0)) as i16, 0),
+            true => (self.amps.abs() as u8, 0),
             false => (0, self.amps as u8),
         };
     }
@@ -154,9 +153,29 @@ impl Chademo {
         min_output + (max_output - min_output) * normalized_input
     }
 
+    pub fn update_dynamic_charge_limits(&mut self, amps: impl Into<f32>) {
+        let amps: f32 = amps.into();
+        match amps.is_sign_negative() {
+            true => self.set_max_discharge_amps((-1.0 * amps) as u8),
+            false => self.set_max_charge_amps(amps as u8),
+        }
+    }
+    pub fn disable_dynamic_charge_limits(&mut self) {
+        self.set_max_discharge_amps(MAX_AMPS);
+        self.set_max_charge_amps(MAX_AMPS);
+    }
+
     pub fn output_volts(&self) -> &f32 {
         &self.x109.output_voltage
     }
+    fn set_max_charge_amps(&mut self, amps: impl Into<u8>) {
+        self.x109.output_current = amps.into();
+    }
+    fn set_max_discharge_amps(&mut self, amps: impl Into<u8>) {
+        self.x208.set_input_current(amps.into());
+    }
+
+    /// Monitoring only
     pub fn output_amps(&self) -> &i16 {
         &self.amps
     }
@@ -171,8 +190,14 @@ impl Chademo {
         self.state = state;
     }
 
-    pub fn requested_amps(&self) -> f32 {
+    pub fn requested_charging_amps(&self) -> f32 {
         self.x102.charging_current_request as f32
+    }
+    pub fn requested_discharging_amps(&self) -> f32 {
+        self.x200.maximum_discharge_current as f32
+    }
+    pub fn max_remaining_capacity_for_charging(&self) -> f32 {
+        self.x200.max_remaining_capacity_for_charging as f32
     }
 
     pub fn status_vehicle_contactors(&self) -> bool {
@@ -187,6 +212,7 @@ impl Chademo {
         &self.x102.target_battery_voltage
     }
 
+    // all below this needs verifying
     pub fn can_charge(&self) -> bool {
         self.x102.can_charge()
     }
@@ -197,14 +223,6 @@ impl Chademo {
         self.x109.remaining_charging_time_10s_bit = 255;
         self.x109.remaining_charging_time_1min_bit = 60;
     }
-    // pub fn precharge(&mut self) {
-    //     // self.status_charger_stop_control(true);
-    //     // self.status_station_enabled(false);
-    //     // self.plug_lock(true);
-    // }
-    // pub fn charge_halt(&mut self) {
-    //     // self.status_charger_stop_control(true);
-    // }
     pub fn charge_stop(&mut self) {
         // self.status_charger_stop_control(true);
         // self.status_station_enabled(false);
@@ -224,9 +242,13 @@ impl Chademo {
     pub fn status_station_enabled(&mut self, state: bool) {
         self.x109.status.status_station = state;
     }
-    pub fn plug_lock(&mut self, state: bool) {
+    pub fn plug_lock(&mut self, state: bool) -> Result<(), IndraError> {
+        self.pins
+            .pluglock
+            .set_value(state.into())
+            .map_err(|e| IndraError::PinAccess(e))?;
         self.x109.status.status_vehicle_connector_lock = state; // unsure
-        log_error!("Locking plug", self.pins.pluglock.set_value(state.into()));
+        Ok(())
     }
     pub fn status_vehicle_charging(&self) -> bool {
         self.x102.status.status_vehicle_charging
@@ -242,37 +264,6 @@ impl Chademo {
     }
 }
 
-/*
-#[derive(Default, Debug, Copy, Clone, Serialize, PartialEq, PartialOrd)]
-pub enum ChargerState {
-    /// All open, no can tx, pre idle
-    #[default]
-    Idle,
-    /// Halt activity
-    GotoIdle,
-    /// Reset state and unexport pins
-    Exiting,
-    ///D1 close & Lock plug (tbc)
-    Stage1,
-    ///K0 detected
-    Stage2,
-    ///D2 closed
-    Stage3,
-    /// Await permit charge flag from EV
-    Stage4,
-    ///Voltage across contactors to be closed (final)
-    Stage5,
-    /// Standard charge
-    Stage6,
-    /// V2H
-    Stage7,
-    /// Leaves with error led (red)
-    Panic,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct State(pub ChargerState);
-*/
 pub fn pin_init_out_low(pin: u64) -> Result<Pin, IndraError> {
     let pin_out_low = Pin::new(pin);
     pin_out_low
@@ -305,7 +296,7 @@ pub fn pin_init_input(pin: u64) -> Result<Pin, IndraError> {
     Ok(pin_input)
 }
 
-pub fn release_pin(pin_o: Pin) -> Result<(), IndraError> {
+pub fn _release_pin(pin_o: Pin) -> Result<(), IndraError> {
     let pin = pin_o.get_pin_num();
     pin_o
         .set_value(0)
@@ -423,7 +414,7 @@ pub(crate) enum PinVal {
 }
 #[cfg(test)]
 mod test {
-    use chademo_v2::chademo::X109;
+    use chademo_v2::X109;
     use tokio_socketcan::CANFrame;
 
     use super::*;
@@ -442,5 +433,36 @@ mod test {
         chademo.x109 = x109;
         chademo.x102 = X102::from(&frame);
         assert_eq!(chademo.soc(), &79)
+    }
+    #[test]
+    fn x208_test() {
+        let y = X208::new(1, 500, 16, 250);
+        println!(
+            "{} {} {} {}",
+            y.get_discharge_current(),
+            y.get_input_voltage(),
+            y.get_input_current(),
+            y.get_lower_threshold_voltage()
+        );
+        assert!(y.get_discharge_current() == 1);
+        assert!(y.get_input_voltage() == 500);
+        assert!(y.get_input_current() == 16);
+        assert!(y.get_lower_threshold_voltage() == 250);
+        let cf: CANFrame = y.to_can();
+        assert!(cf.data()[0] == 0xff - 1);
+        assert!(cf.data()[3] == 0xff - 16);
+
+        let y: X208 = X208::from(&cf);
+        println!(
+            "{} {} {} {}",
+            y.get_discharge_current(),
+            y.get_input_voltage(),
+            y.get_input_current(),
+            y.get_lower_threshold_voltage()
+        );
+        assert!(y.get_discharge_current() == 1);
+        assert!(y.get_input_voltage() == 500);
+        assert!(y.get_input_current() == 16);
+        assert!(y.get_lower_threshold_voltage() == 250);
     }
 }

@@ -1,8 +1,6 @@
-use std::ops::Deref;
-
-use serde::{Deserialize, Serialize};
-
 use crate::MAX_AMPS;
+use serde::{Deserialize, Serialize};
+use std::ops::Deref;
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct ChargeParameters {
@@ -23,7 +21,10 @@ impl ChargeParameters {
         *self.deref()
     }
     pub fn get_eco(&self) -> bool {
-        self.eco.is_some()
+        match self.eco {
+            Some(b) => b,
+            None => false,
+        }
     }
     pub fn set_eco(&mut self, enabled: bool) -> Self {
         self.eco = Some(enabled);
@@ -46,20 +47,24 @@ impl Default for ChargeParameters {
         }
     }
 }
-/*
-"{"Charge":{"amps":15,"eco":false,"soc_limit":10}}"
-"{'Charge': {'amps': 5, 'eco': False, 'soc_limit': None}"
 
-*/
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
 pub enum OperationMode {
+    /// Bidirectional load matching
     V2h,
+    /// Custom charge profile
     Charge(ChargeParameters),
+    /// Safe idle mode - plug unlocked
     #[default]
     Idle,
+    /// Bad state
     Uninitalised,
+    /// Shutdown all peripherals and safetly unlock plug
     Quit,
+    /// Forced discharge mode
+    Discharge(ChargeParameters),
 }
+
 impl OperationMode {
     pub fn eco_charge(&mut self, enabled: bool) {
         let cp = ChargeParameters::default().set_eco(enabled);
@@ -75,28 +80,25 @@ impl OperationMode {
     }
     pub fn is_eco(&self) -> bool {
         match self {
-            OperationMode::Charge(p) => p.eco.is_some(),
+            Self::Charge(p) => p.eco.is_some(),
             _ => false,
         }
     }
+    pub fn is_discharge(&self) -> bool {
+        matches!(self, Self::Discharge(_))
+    }
     pub fn soc_limit(&self) -> Option<u8> {
         match self {
-            OperationMode::Charge(p) => p.soc_limit,
+            Self::Charge(p) => p.soc_limit,
             _ => None,
         }
     }
-    // pub fn amps_limit(&self) -> u8 {
-    //     match self {
-    //         OperationMode::Charge(p) => p.amps,
-    //         _ => 0,
-    //     }
-    // }
     pub fn boost(&mut self) {
         use OperationMode::*;
         *self = match self {
             Quit => Quit,
             Uninitalised => Idle,
-            V2h | Idle => Charge(ChargeParameters::default()),
+            Discharge(_) | V2h | Idle => Charge(ChargeParameters::default()),
             Charge(_) => V2h,
         }
     }
@@ -105,7 +107,7 @@ impl OperationMode {
         *self = match self {
             Quit => Quit,
             Uninitalised => Idle,
-            V2h | Charge(_) => Idle,
+            Discharge(_) | V2h | Charge(_) => Idle,
             Idle => V2h,
         }
     }
@@ -117,6 +119,18 @@ impl OperationMode {
         use OperationMode::*;
         matches!(self, Idle)
     }
+    pub fn is_quit(&self) -> bool {
+        use OperationMode::*;
+        matches!(self, Quit)
+    }
+    pub fn is_uninitalised(&self) -> bool {
+        use OperationMode::*;
+        matches!(self, Uninitalised)
+    }
+    pub fn is_inactive(&self) -> bool {
+        self.is_idle() || self.is_quit() || self.is_uninitalised()
+    }
+
     pub fn is_charge(&self) -> bool {
         use OperationMode::*;
         matches!(self, Charge(_))

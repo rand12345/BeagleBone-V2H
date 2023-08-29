@@ -106,7 +106,7 @@ pub async fn enabled_wait(
             sleep(t100ms).await;
             if let Ok(rx) = can_send_recv(can_socket, status_frame(), t100ms).await {
                 if pre.from_slice(rx.data()).is_ok() {
-                    log::info!("Status ok");
+                    // log::info!("Status ok");
                     break;
                 };
             }

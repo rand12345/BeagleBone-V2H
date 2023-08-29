@@ -1,4 +1,5 @@
 use super::config::MeterConfig;
+use crate::data_io::mqtt::CHADEMO_DATA;
 use crate::error::IndraError;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::io::AsyncReadExt;
@@ -58,6 +59,9 @@ pub async fn meter(config: MeterConfig) -> Result<(), IndraError> {
         // log::info!("Meter value {} (-ve is export to load)", val);
         {
             *METER.clone().lock().await = val
+        }
+        {
+            CHADEMO_DATA.clone().lock().await.from_meter(val);
         }
     }
 }

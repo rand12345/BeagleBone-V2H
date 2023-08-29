@@ -1,6 +1,6 @@
 use rumqttc::ClientError;
 use std::net::AddrParseError;
-
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum IndraError {
     Error,
@@ -20,6 +20,9 @@ pub enum IndraError {
     CanBusRxTimeout(u8),
     PreInitFailed,
     PinAccess(sysfs_gpio::Error),
+    Serialise(serde_json::Error),
+    Deserialise(serde_json::Error),
+    Timeout,
     // FileAccess(_),
     // I2cWriteError,
 }
@@ -45,6 +48,9 @@ impl std::fmt::Display for IndraError {
             CanBusRxTimeout(n) => write!(f, "can{n} read timout "),
             PreInitFailed => write!(f, "PreInitFailed"),
             PinAccess(e) => write!(f, "GPIO error {e:?} "),
+            Serialise(e) => write!(f, "json serialise {e:?} "),
+            Deserialise(e) => write!(f, "json deserialise {e:?} "),
+            Timeout => write!(f, "Timeout"),
             // I2cWriteError => write!(f, "I2c write failed"),
         }
     }

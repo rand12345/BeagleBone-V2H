@@ -21,6 +21,7 @@ pub enum PreState {
     Init,
     Online,
 }
+#[allow(dead_code)]
 impl PreState {
     pub fn is_offline(&self) -> bool {
         use PreState::*;
