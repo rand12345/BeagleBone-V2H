@@ -14,11 +14,10 @@ ws.onmessage = (event) => {
 ws.onopen = () => {
     // Send an initial request when the WebSocket connection is open
     const initialRequestMessage = JSON.stringify({ cmd: "GetJson" });
-    ws.send(initialRequestMessage);
+    // ws.send(initialRequestMessage);
     // Start sending periodic requests every 5 seconds
     setInterval(() => {
-        const periodicRequestMessage = JSON.stringify({ cmd: "GetJson" });
-        ws.send(periodicRequestMessage);
+        console.log(initialRequestMessage);
     }, 5000);
 };
 
@@ -44,12 +43,12 @@ document.getElementById("chargeForm").addEventListener("submit", function (event
     };
 
     // Display JSON object (for demonstration purposes)
-    alert(JSON.stringify(jsonCommand, null, 2));
+    console.log(JSON.stringify(jsonCommand, null, 2));
 
     // You can send the JSON object to your WebSocket API here
     // For example:
     // const ws = new WebSocket("your websocket URL");
-    ws.send(JSON.stringify(jsonCommand));
+    // ws.send(JSON.stringify(jsonCommand));
 });
 
 function updateTable(data) {

@@ -192,6 +192,7 @@ async fn charge_mode(
             }
             update_panel_leds(&led_tx, &chademo).await
         }
+        update_chademo_mutex(chademo).await;
 
         let op = chademo.state();
 

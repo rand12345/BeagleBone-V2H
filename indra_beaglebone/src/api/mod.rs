@@ -115,7 +115,13 @@ fn process_ws_message(
                 let response = Response::Mode(mode);
                 Ok(Message::Text(serde_json::to_string(&response).unwrap()))
             }
-            Cmd::GetJson => {
+            Cmd::GetMode => {
+                let mode = CHADEMO.clone().lock().await;
+                let json_mode: &str = serde_json::to_string(*mode.get_state()).try_into();
+                let response = Response::Data(data);
+                Ok(Message::Text(serde_json::to_string(&response).unwrap()))
+            }
+            Cmd::GetData => {
                 let response = Response::Data(data);
                 Ok(Message::Text(serde_json::to_string(&response).unwrap()))
             }
@@ -149,7 +155,7 @@ fn process_ws_message(
 enum Cmd {
     SetMode(OperationMode),
     #[default]
-    GetJson,
+    GetData,
     SetEvents(String),
     GetEvents,
 }
