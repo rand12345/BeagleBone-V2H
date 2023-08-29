@@ -20,9 +20,37 @@ ws.onopen = () => {
         const periodicRequestMessage = JSON.stringify({ cmd: "GetJson" });
         ws.send(periodicRequestMessage);
     }, 5000);
-
-
 };
+
+document.getElementById("chargeForm").addEventListener("submit", function (event) {
+    event.preventDefault(); // Prevent the form from submitting
+
+    // Gather form data
+    const amps = parseInt(document.getElementById("amps").value);
+    const eco = document.getElementById("eco").checked;
+    const soc_limit = parseInt(document.getElementById("soc_limit").value);
+
+    // Create JSON object
+    const jsonCommand = {
+        cmd: {
+            SetMode: {
+                Charge: {
+                    amps: amps,
+                    eco: eco,
+                    soc_limit: soc_limit
+                }
+            }
+        }
+    };
+
+    // Display JSON object (for demonstration purposes)
+    alert(JSON.stringify(jsonCommand, null, 2));
+
+    // You can send the JSON object to your WebSocket API here
+    // For example:
+    // const ws = new WebSocket("your websocket URL");
+    ws.send(JSON.stringify(jsonCommand));
+});
 
 function updateTable(data) {
     const tableBody = document.querySelector('#dataTable tbody');

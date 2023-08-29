@@ -35,10 +35,24 @@
 			<label><input type="radio" name="mode" value="Charge"> Charge</label>
 			<label><input type="radio" name="mode" value="Idle"> Idle</label>
 		</section>
+		<section>
+			<h1>Charge Parameters Form</h1>
+			<form id="chargeForm">
+				<label for="amps">Amps:</label>
+				<input type="number" id="amps" name="amps" min="0" max="255"><br><br>
 
-		<div id="chartContainer" style="height: 300px; width: 100%;"></div>
-		<script src="https://canvasjs.com/assets/script/jquery-1.11.1.min.js"></script>
-		<script src="https://cdn.canvasjs.com/jquery.canvasjs.min.js"></script>
+				<label for="eco">Eco:</label>
+				<input type="checkbox" id="eco" name="eco"><br><br>
+
+				<label for="soc_limit">SOC Limit:</label>
+				<input type="number" id="soc_limit" name="soc_limit" min="0" max="100"><br><br>
+
+				<button type="submit">Submit</button>
+			</form>
+		</section>
+		<!-- <div id="chartContainer" style="height: 300px; width: 100%;"></div> -->
+		<!-- <script src="https://canvasjs.com/assets/script/jquery-1.11.1.min.js"></script> -->
+		<!-- <script src="https://cdn.canvasjs.com/jquery.canvasjs.min.js"></script> -->
 		<script src="script.js"></script>
 	</main>
 </body>
