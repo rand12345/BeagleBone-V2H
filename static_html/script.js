@@ -1,150 +1,421 @@
-const ws = new WebSocket('ws://10.0.1.177:5555');
+const ampsSlider = document.getElementById('amps');
+const ampsLabel = document.getElementById('ampsLabel');
+const socLimitSlider = document.getElementById('soc_limit');
+const socLimitLabel = document.getElementById('socLimitLabel');
 
-ws.onmessage = (event) => {
-    const message = JSON.parse(event.data);
+const overlay = document.getElementById('overlay');
+const messageBox = document.getElementById('messageBox');
+const connectionStatus = document.getElementById('connectionStatus');
+const eventsTable = document.getElementById('eventsTable').getElementsByTagName('tbody')[0];
+const updateButton = document.getElementById('updateButton');
 
-    if (message.Data) {
-        updateTable(message.Data);
-        updateGraph(message.Data);
+const addRowButton = document.getElementById('addRowButton');
+addRowButton.addEventListener('click', () => addRow());
 
-    } else if (message.Mode) {
-        updateRadioButtons(message.Mode);
-    }
-};
-ws.onopen = () => {
-    // Send an initial request when the WebSocket connection is open
-    const initialRequestMessage = JSON.stringify({ cmd: "GetJson" });
-    // ws.send(initialRequestMessage);
-    // Start sending periodic requests every 5 seconds
-    setInterval(() => {
-        console.log(initialRequestMessage);
-    }, 5000);
-};
+let eventData = [];
+let currentlyEditingRow = null;
 
-document.getElementById("chargeForm").addEventListener("submit", function (event) {
-    event.preventDefault(); // Prevent the form from submitting
 
-    // Gather form data
-    const amps = parseInt(document.getElementById("amps").value);
-    const eco = document.getElementById("eco").checked;
-    const soc_limit = parseInt(document.getElementById("soc_limit").value);
+function showOverlay() {
+    overlay.style.display = 'block';
+    messageBox.style.display = 'block';
+}
 
-    // Create JSON object
-    const jsonCommand = {
-        cmd: {
-            SetMode: {
-                Charge: {
-                    amps: amps,
-                    eco: eco,
-                    soc_limit: soc_limit
-                }
-            }
+function hideOverlay() {
+    overlay.style.display = 'none';
+    messageBox.style.display = 'none';
+}
+
+function connectWebSocket() {
+    showOverlay();
+
+    const ws = new WebSocket('ws://10.0.1.177:5555');
+
+    ws.onmessage = (event) => {
+        const message = JSON.parse(event.data);
+        console.log("Incoming ws: ", message);
+        if (message.Data) {
+            updateDataTable(message.Data)
+            // console.log(message.Data);
+            addPlotData(message.Data);
+        } else if (message.Mode) {
+            updateButtons(message.Mode);
+        } else if (message.Events) {
+            eventData = message.Events; // Store the initial data
+            populateTable(message.Events);
         }
     };
 
-    // Display JSON object (for demonstration purposes)
-    console.log(JSON.stringify(jsonCommand, null, 2));
+    ws.onopen = () => {
+        hideOverlay();
+        const initialRequestMessage1 = JSON.stringify({ cmd: "GetData" });
+        const initialRequestMessage2 = JSON.stringify({ cmd: "GetMode" });
+        const initialRequestMessage3 = JSON.stringify({ cmd: "GetEvents" });
+        ws.send(initialRequestMessage1);
+        ws.send(initialRequestMessage2);
+        ws.send(initialRequestMessage3);
 
-    // You can send the JSON object to your WebSocket API here
-    // For example:
-    // const ws = new WebSocket("your websocket URL");
-    // ws.send(JSON.stringify(jsonCommand));
-});
+        setInterval(() => {
+            ws.send(initialRequestMessage1);
+            // console.log(initialRequestMessage1);
+            ws.send(initialRequestMessage2);
+            // console.log(initialRequestMessage2);
+        }, 5000);
+    };
 
-function updateTable(data) {
-    const tableBody = document.querySelector('#dataTable tbody');
+    ws.onclose = () => {
+        showOverlay();
+        connectionStatus.innerText = "Connection lost. Attempting to reconnect...";
+
+        // Attempt to reconnect after a delay
+        setTimeout(connectWebSocket, 5000);
+    };
+    document.getElementById("chargeForm").addEventListener("submit", function (event) {
+        event.preventDefault(); // Prevent the form from submitting
+
+        // Gather form data
+        const amps = parseInt(document.getElementById("amps").value);
+        const eco = document.getElementById("eco").checked;
+        const soc_limit = parseInt(document.getElementById("soc_limit").value);
+
+        // Create JSON object
+        const jsonCommand = {
+            cmd: {
+                SetMode: {
+                    Charge: {
+                        amps: amps,
+                        eco: eco,
+                        soc_limit: soc_limit
+                    }
+                }
+            }
+        };
+        console.log(JSON.stringify(jsonCommand, null, 2));
+        ws.send(JSON.stringify(jsonCommand));
+    });
+    const buttons = document.querySelectorAll('.mode-button');
+    buttons.forEach((button) => {
+        button.addEventListener('click', () => {
+            const mode = button.value;
+            const message = { cmd: { SetMode: mode } };
+            // const message = { SetMode: mode };
+            ws.send(JSON.stringify(message));
+
+            updateButtons(mode);
+        });
+    });
+    updateButton.addEventListener('click', () => {
+        const updatedData = Array.from(eventsTable.rows).map((row) => {
+            return {
+                time: row.cells[0].textContent,
+                action: row.cells[1].textContent,
+            };
+        });
+
+        const updateMessage = JSON.stringify({ cmd: { "SetEvents": updatedData } });
+
+        console.log("Update table " + updateMessage);
+        ws.send(updateMessage);
+    });
+
+}
+
+connectWebSocket();
+
+function updateDataTable(data) {
+    const tbody = document.querySelector('#dataTable tbody');
 
     const newRow = document.createElement('tr');
-    newRow.innerHTML = `
-        <td>${data.soc}</td>
-        <td>${data.state}</td>
-        <td>${data.temp}</td>
-        <td>${data.volts * data.amps}</td>
-    `;
 
-    tableBody.innerHTML = ''; // Clear existing rows
-    tableBody.appendChild(newRow);
+    const localtimeCell = document.createElement('td');
+    const currentTime = new Date().toLocaleTimeString();
+    localtimeCell.textContent = currentTime;
+    newRow.appendChild(localtimeCell);
+
+    const socCell = document.createElement('td');
+    socCell.textContent = data.soc;
+    newRow.appendChild(socCell);
+
+    const stateCell = document.createElement('td');
+    stateCell.textContent = data.state;
+    newRow.appendChild(stateCell);
+
+    const tempCell = document.createElement('td');
+    tempCell.textContent = data.temp;
+    newRow.appendChild(tempCell);
+
+    const fanCell = document.createElement('td');
+    fanCell.textContent = data.fan;
+    newRow.appendChild(fanCell);
+
+    const wattsCell = document.createElement('td');
+    wattsCell.textContent = data.ac_w;
+    newRow.appendChild(wattsCell);
+
+    tbody.insertBefore(newRow, tbody.firstChild);
+
+    // If the tbody has too many rows, remove the last one
+    if (tbody.children.length > 100) {
+        tbody.removeChild(tbody.lastChild);
+    }
 }
 
-function updateRadioButtons(mode) {
-    const radioButtons = document.querySelectorAll('input[name="mode"]');
-    radioButtons.forEach((radio) => {
-        radio.checked = radio.value === mode;
+
+function addRow() {
+    const row = eventsTable.insertRow();
+    const timeCell = row.insertCell(0);
+    const actionCell = row.insertCell(1);
+    const editCell = row.insertCell(2);
+    const deleteCell = row.insertCell(3);
+
+
+    // Default values for the new row
+    const timePicker = document.createElement('input');
+    timePicker.type = 'time';
+    timePicker.value = '00:00:00';
+    timeCell.innerHTML = '';
+    timeCell.appendChild(timePicker);
+
+    const actionDropdown = document.createElement('select');
+    const actions = ['Charge', 'Discharge', 'Sleep', 'V2h', 'Eco'];
+    actions.forEach((action) => {
+        const option = document.createElement('option');
+        option.value = action;
+        option.textContent = action;
+        actionDropdown.appendChild(option);
+    });
+    actionDropdown.value = 'Sleep';
+    actionCell.innerHTML = '';
+    actionCell.appendChild(actionDropdown);
+
+    const editButton = document.createElement('button');
+    editButton.textContent = 'Save';
+    editButton.addEventListener('click', () => finishEditingRow(row));
+    editCell.appendChild(editButton);
+
+    // Simulate a click on the edit button for the new row
+    editButton.click();
+
+    const deleteButton = document.createElement('button');
+    deleteButton.textContent = 'Delete';
+    deleteButton.addEventListener('click', () => deleteRow(row));
+    deleteCell.appendChild(deleteButton);
+}
+
+function populateTable(data) {
+    eventsTable.innerHTML = '';
+
+    data.forEach((event, index) => {
+        const row = eventsTable.insertRow();
+        const timeCell = row.insertCell(0);
+        const actionCell = row.insertCell(1);
+        const editCell = row.insertCell(2);
+        const deleteCell = row.insertCell(3);
+
+        timeCell.textContent = event.time;
+        actionCell.textContent = event.action;
+
+        const editButton = document.createElement('button');
+        editButton.textContent = 'Edit';
+        editButton.addEventListener('click', () => editRow(row, event));
+        editCell.appendChild(editButton);
+
+        const deleteButton = document.createElement('button');
+        deleteButton.textContent = 'Delete';
+        deleteButton.addEventListener('click', () => deleteRow(row, event));
+        deleteCell.appendChild(deleteButton);
     });
 }
 
-const radioButtons = document.querySelectorAll('input[name="mode"]');
-radioButtons.forEach((radio) => {
-    radio.addEventListener('change', () => {
-        if (radio.checked) {
-            const mode = radio.value;
-            const message = { cmd: { SetMode: mode } };
-            ws.send(JSON.stringify(message));
+
+
+function editRow(row, event) {
+    // if (currentlyEditingRow) {
+    //     finishEditingRow();
+    // }
+    if (event == null) {
+        var event = '';
+        event.time = '00:00:00';
+        event.action = 'Sleep';
+    };
+
+    currentlyEditingRow = row;
+
+    const timeCell = row.cells[0];
+    const actionCell = row.cells[1];
+    const editCell = row.cells[2];
+    const editButton = document.createElement('button');
+    editCell.innerHTML = ''
+    editButton.textContent = 'Save';
+    editButton.addEventListener('click', () => finishEditingRow(row, event));
+    editCell.appendChild(editButton);
+
+
+    // Create a time picker for the time cell
+    const timePicker = document.createElement('input');
+    timePicker.type = 'time';
+    timePicker.step = 1;
+    timePicker.value = event.time;
+    timeCell.innerHTML = '';
+    timeCell.appendChild(timePicker);
+
+    // Create a dropdown for the action cell
+    const actionDropdown = document.createElement('select');
+    const actions = ['Charge', 'Discharge', 'Sleep', 'V2h', 'Eco'];
+    actions.forEach((action) => {
+        const option = document.createElement('option');
+        option.value = action;
+        option.textContent = action;
+        actionDropdown.appendChild(option);
+    });
+    actionDropdown.value = event.action;
+    actionCell.innerHTML = '';
+    actionCell.appendChild(actionDropdown);
+
+    // Disable the Update button
+    updateButton.disabled = true;
+    addRowButton.disabled = true;
+}
+
+function finishEditingRow(row, event) {
+    // if (currentlyEditingRow) {
+    const timeCell = row.cells[0];
+    const actionCell = row.cells[1];
+    const editCell = row.cells[2];
+    const editButton = document.createElement('button');
+    editCell.innerHTML = '';
+    editButton.textContent = 'Edit';
+    editButton.addEventListener('click', () => editRow(row, event));
+    editCell.appendChild(editButton);
+    // Remove the time picker and dropdown
+    timeCell.textContent = timeCell.firstChild.value; //here
+    actionCell.textContent = actionCell.firstChild.value;
+
+    currentlyEditingRow = null;
+    updateButton.disabled = false;
+    addRowButton.disabled = false;
+}
+
+function deleteRow(row, event) {
+    const confirmDelete = confirm('Are you sure you want to delete this event?');
+    if (confirmDelete) {
+        row.remove();
+    }
+}
+
+
+
+
+function updateButtons(mode) {
+    console.log("updateButtons " + mode);
+    const buttons = document.querySelectorAll('.mode-button');
+    buttons.forEach((button) => {
+        if (button.value === mode) {
+            button.classList.add('active');
+            button.disabled = true;
+        } else {
+            button.classList.remove('active');
+            button.disabled = false;
         }
     });
+}
+
+
+
+
+ampsSlider.addEventListener('input', () => {
+    updateSliderLabel(ampsSlider, ampsLabel);
 });
 
-
-
-window.onload = function () {
-
-}
-
-const dataPoints = [];
-
-const chart = new CanvasJS.Chart("chartContainer", {
-    theme: "dark2",
-    title: {
-        text: "Live Data"
-    },
-    axisX: {
-        title: "time",
-        gridThickness: 2,
-        interval: 2,
-        intervalType: "minute",
-        valueFormatString: "hh TT K",
-        labelAngle: -20
-    },
-    axisY: {
-        title: "Watts"
-    },
-    data: [{
-        type: "line",
-        xValueType: "dateTime",
-        dataPoints: dataPoints
-    }]
+socLimitSlider.addEventListener('input', () => {
+    updateSliderLabel(socLimitSlider, socLimitLabel);
 });
-// updateData();
 
-// Initial Values
-var xValue = new Date();
-var yValue = 10;
-var newDataCount = 6;
+function updateSliderLabel(slider, label) {
+    const min = slider.min;
+    const max = slider.max;
+    const value = slider.value;
 
-function addData(data) {
-    // if (newDataCount != 1) {
-    //     $.each(data, function (key, value) {
-    //         if (key != "amps") { } else {
-    //             dataPoints.push({ x: new Date(), y: parseInt(valie * data.volts) });
-    //             xValue++;
-    //             yValue = parseInt(value[1]);
-    //         }
-    //     });
-    // } else {
-    dataPoints.shift();
-    // dataPoints.push({ x: xValue, y: parseInt(data.amps) });
-    dataPoints.push({ x: new Date(), y: parseInt(data.amps * data.volts) });
-    // xValue++;
-    yValue = parseInt(data.amps * data.volts);
-    // }
+    label.innerText = value;
+    label.style.left = `calc(${(value - min) / (max - min) * 100}% - 10px)`;
 
-    newDataCount = 1;
-    chart.render();
-    // setTimeout(updateGraph, 1500);
 }
 
-function updateGraph(data) {
-    $.getJSON("https://canvasjs.com/services/data/datapoints.php?xstart=" + xValue + "&ystart=" + yValue + "&length=" + newDataCount + "type=json", addData(data));
+const plotContainer = document.getElementById('plotContainer');
+let plotData = {
+    dc_kw: [],
+    amps: [],
+    fan: [],
+    requested_amps: [],
+    soc: [],
+    temp: [],
+    meter_kw: [],
+};
+
+function addPlotData(data) {
+    const time = new Date().toLocaleTimeString(); // Get current time
+
+    // Append data points to respective arrays
+    Object.keys(plotData).forEach(field => {
+        if (field !== 'volts') {
+            plotData[field].push({ x: time, y: data[field] });
+        }
+    });
+
+    updatePlot();
 }
 
-// }
+
+function updatePlot() {
+    const layout = {
+        title: 'Real-time Data Plot',
+        xaxis: {
+            title: 'Time'
+        },
+        yaxis: {
+            title: 'Value'
+        },
+        yaxis2: {
+            title: 'SoC, Fan and Temp',
+            overlaying: 'y',
+            side: 'right',
+            range: [0, 100]
+        },
+        legend: {
+            x: 0.0, // Center the legend horizontally
+            y: -0.4, // Move the legend to the bottom
+            orientation: 'h' // Arrange the legend horizontally
+        }
+    };
+
+    const plotConfig = {
+        responsive: true
+    };
+
+    const traces = Object.keys(plotData).map(field => {
+        if (field === 'soc' || field === 'temp' || field === 'fan') {
+            return {
+                x: plotData[field].map(dataPoint => dataPoint.x),
+                y: plotData[field].map(dataPoint => dataPoint.y),
+                name: field,
+                type: 'line',
+                yaxis: 'y2' // Associate with the second y-axis
+            };
+        } else {
+            return {
+                x: plotData[field].map(dataPoint => dataPoint.x),
+                y: plotData[field].map(dataPoint => dataPoint.y),
+                name: field,
+                type: 'line'
+            };
+        }
+    });
+
+    const data = traces;
+
+    Plotly.newPlot(plotContainer, data, layout, plotConfig);
+}
+
+
+
+

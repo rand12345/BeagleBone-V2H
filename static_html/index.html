@@ -6,56 +6,146 @@
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@1/css/pico.min.css">
 	<title>WebSockets test</title>
+	<style>
+		#overlay {
+			display: none;
+			position: fixed;
+			top: 0;
+			left: 0;
+			width: 100vw;
+			height: 100vh;
+			background-color: rgba(0, 0, 0, 0.7);
+			z-index: 9999;
+		}
+
+		#messageBox {
+			display: none;
+			position: fixed;
+			top: 50%;
+			left: 50%;
+			transform: translate(-50%, -50%);
+			background-color: white;
+			padding: 20px;
+			border-radius: 5px;
+			box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+			z-index: 10000;
+		}
+
+		#connectionStatus {
+			text-align: center;
+			margin-bottom: 10px;
+		}
+
+		.mode-button.active {
+			background-color: #062163;
+			/* Change this to your desired active state color */
+			color: #fff;
+			/* Change this to your desired text color */
+		}
+
+		.data_section {
+			max-height: 400px;
+			/* Set the desired maximum height for the scrollable area */
+			overflow-y: auto;
+			/* Add vertical scrollbar when content exceeds max-height */
+		}
+	</style>
 </head>
 
 <body class="container">
-	<header>
-		<h2>Realtime data</h2>
-		<table id="dataTable">
+
+	<main>
+		<div id="overlay">
+			<div id="messageBox">
+				<div id="connectionStatus">Attempting to establish WebSocket connection...</div>
+			</div>
+		</div>
+	</main>
+	<section>
+		<div class="grid">
+			<div>
+				<h2>Mode Selection</h2>
+				<div class="grid">
+					<input type="button" class="mode-button" name="mode" value="Idle">
+					<input type="button" class="mode-button" name="mode" value="V2h">
+				</div>
+				<div class="grid">
+					<input type="button" class="mode-button" name="mode" value="Discharge">
+					<input type="button" class="mode-button" name="mode" value="Charge">
+				</div>
+			</div>
+			<div class="container-fluid">
+				<h2>Manual Charge Parameters</h2>
+				<form id="chargeForm">
+					<div class="grid container-fluid">
+						<label for="amps">Amps: <span id="ampsLabel">16</span>
+							<input type="range" id="amps" name="amps" min="0" max="16" value="16">
+						</label>
+						<label for="soc_limit">SOC Limit: <span id="socLimitLabel">100</span>
+							<input type="range" id="soc_limit" name="soc_limit" min="30" max="100" value="100">
+						</label>
+
+						<label for="eco" title="Permits charge to vehicle from exported energy only">Solar Economy:
+							<input type="checkbox" id="eco" name="eco">
+						</label>
+					</div>
+					<!-- <br> -->
+					<button type="submit">Submit</button>
+
+
+				</form>
+			</div>
+		</div>
+	</section>
+
+	<section id="eventsSection">
+		<h2>Event Table</h2>
+		<table id="eventsTable">
 			<thead>
 				<tr>
-					<th>SoC</th>
-					<th>State</th>
-					<th>Temperature</th>
-					<th>Watts</th>
+					<th>Time</th>
+					<th>Action</th>
+					<th>Edit</th>
+					<th>Delete</th>
 				</tr>
 			</thead>
 			<tbody>
-				<!-- Data rows will be added dynamically here -->
+				<!-- Data will be populated here -->
 			</tbody>
 		</table>
-	</header>
-	<main></main>
-	<section>
-		<h2>Mode Selection</h2>
-		<div>
-			<input type="button" name="mode" value="V2h">
-			<input type="button" name="mode" value="Charge">
-			<input type="button" name="mode" value="Idle">
+		<div class="grid container-fluid">
+			<button id="addRowButton">Add Event</button>
+			<button id="updateButton">Update</button>
 		</div>
-
-		<hr>
-		<h1>Charge Parameters</h1>
-		<form id="chargeForm">
-			<div class="grid">
-				<label for="amps">Amps:
-					<input type="range" id="amps" name="amps" min="0" max="16" value="16">
-				</label>
-				<label for="soc_limit">SOC Limit:
-					<input type="range" id="soc_limit" name="soc_limit" min="30" max="100" value="100">
-				</label>
-				<label for="eco">Solar Economy:
-					<br><input type="checkbox" id="eco" name="eco">
-				</label>
-				<br>
-				<button type="submit">Submit</button>
-			</div>
-
-		</form>
 	</section>
-	<!-- <div id="chartContainer" style="height: 300px; width: 100%;"></div> -->
-	<!-- <script src="https://canvasjs.com/assets/script/jquery-1.11.1.min.js"></script> -->
-	<!-- <script src="https://cdn.canvasjs.com/jquery.canvasjs.min.js"></script> -->
+	<section>
+		<h2>Graphing</h2>
+		<figure class="container-fluid">
+			<div id="plotContainer"></div>
+
+		</figure>
+		<div class="data_section">
+			<!-- <div id="connectionStatus">Attempting to establish WebSocket connection...</div> -->
+			<h2>Realtime data</h2>
+			<table id="dataTable">
+				<thead>
+					<tr>
+						<th>Localtime</th>
+						<th>SoC %</th>
+						<th>State</th>
+						<th>Temperature ºC</th>
+						<th>Fan duty %</th>
+						<th>Watts</th>
+					</tr>
+				</thead>
+				<tbody>
+					<!-- Data rows will be added dynamically here -->
+				</tbody>
+			</table>
+		</div>
+	</section>
+
+	<script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 	<script src="script.js"></script>
 	</main>
 </body>
