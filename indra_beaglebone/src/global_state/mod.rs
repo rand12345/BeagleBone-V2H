@@ -14,6 +14,13 @@ mod test {
         };
         let op = OperationMode::Charge(cp);
         let json = serde_json::to_string(&op).unwrap();
+        println!("{json}");
+
+        //        {"Charge":{"amps":15,"eco":false,"soc_limit":80}}
+        // {"cmd":{"Charge":{"amps":90,"eco":false,"soc_limit":16}}}
+
+        let op = OperationMode::V2h;
+        let json = serde_json::to_string(&op).unwrap();
         println!("{json}")
     }
 }

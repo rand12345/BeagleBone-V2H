@@ -97,7 +97,12 @@
 			const chargePayload = {
 				cmd: commandOp
 			};
-			console.log('Testing charge payload' + JSON.stringify(chargePayload));
+
+			const mode = {Setmode: chargePayload};
+			const instruction = {
+				cmd: mode
+			};
+			console.log('Testing charge payload' + JSON.stringify(instruction));
 			// Send the payload as a JSON string
 			// socket.send(JSON.stringify(chargePayload));
 		});
