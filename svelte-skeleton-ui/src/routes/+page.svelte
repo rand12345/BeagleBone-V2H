@@ -6,10 +6,8 @@
 	// import type { TableSource } from '@skeletonlabs/skeleton';
 	import { onMount } from 'svelte';
 	import { readable, writable } from 'svelte/store';
-	const count = writable(0, () => {
-		console.log('got a subscriber');
-		return () => console.log('no more subscribers');
-	});
+
+	
 	interface RangeSliderProps {
 		value: number;
 		min: number;
@@ -24,23 +22,13 @@
 		action: string;
 	}
 
-	enum OperationMode {
-		Charge = 'Charge',
-		Discharge = 'Charge',
-		V2h = 'V2h',
-		Idle = 'Idle',
-		Uninitalised = 'Uninitalised',
-		Quit = 'Quit'
-	}
-
-	interface CustomChargePayload {
-		cmd: OperationMode; // You may want to specify the exact type for "cmd"
-		params: {
+	interface ChargeOptions{
 			amps?: number;
 			eco?: boolean;
 			soc_limit?: number;
-		};
+		
 	}
+
 
 	// Define interfaces for your data
 	interface EventData {
@@ -99,14 +87,15 @@
 			);
 			const ecoCheckbox = (document.getElementById('eco') as HTMLInputElement)?.checked;
 
-			// Create the charge request payload
-			const chargePayload: CustomChargePayload = {
-				cmd: OperationMode.Charge,
-				params: {
-					amps: ampsValue,
+			const chargeParams: ChargeOptions = {amps: ampsValue,
 					eco: ecoCheckbox,
-					soc_limit: socRangeValue
-				}
+					soc_limit: socRangeValue};
+			// Create the charge request payload
+			const commandOp = {
+				Charge: chargeParams
+			}
+			const chargePayload = {
+				cmd: commandOp
 			};
 			console.log('Testing charge payload' + JSON.stringify(chargePayload));
 			// Send the payload as a JSON string
