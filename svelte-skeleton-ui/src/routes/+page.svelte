@@ -86,25 +86,22 @@
 				(document.getElementById('range-slider-soc') as HTMLInputElement)?.value
 			);
 			const ecoCheckbox = (document.getElementById('eco') as HTMLInputElement)?.checked;
-
-			const chargeParams: ChargeOptions = {amps: ampsValue,
-					eco: ecoCheckbox,
-					soc_limit: socRangeValue};
-			// Create the charge request payload
-			const commandOp = {
-				Charge: chargeParams
-			}
 			const chargePayload = {
-				cmd: commandOp
+			cmd: {
+				SetMode: {
+					Charge: {
+						amps: ampsValue,
+						eco: ecoCheckbox,
+						soc_limit: socRangeValue,
+						},	
+					},
+				},
 			};
 
-			const mode = {Setmode: chargePayload};
-			const instruction = {
-				cmd: mode
-			};
-			console.log('Testing charge payload' + JSON.stringify(instruction));
+			console.log('Testing charge payload' + JSON.stringify(chargePayload));
 			// Send the payload as a JSON string
-			// socket.send(JSON.stringify(chargePayload));
+			// {"cmd":{"Setmode":{"cmd":{"Charge":{"amps":90,"eco":false,"soc_limit":16}}}}}
+			socket.send(JSON.stringify(chargePayload));
 		});
 		console.log('on mount');
 		if (socket) {
