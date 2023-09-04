@@ -75,6 +75,19 @@
 		});
 	}
 	onMount(() => {
+		document.getElementById('modeRadio')?.addEventListener('change', (event) => {
+			const mode = value;
+						const chargePayload = {
+			cmd: {
+				SetMode: mode
+				},
+			};
+						console.log('Testing mode payload' + JSON.stringify(chargePayload));
+			// Send the payload as a JSON string
+    // {"cmd": {"SetMode": "V2h"}}
+    // {"cmd": {"SetMode": "Idle"}}
+			socket.send(JSON.stringify(chargePayload));
+		});
 		document.getElementById('chargeForm')?.addEventListener('submit', (event) => {
 			event.preventDefault(); // Prevent the default form submission
 
@@ -86,6 +99,7 @@
 				(document.getElementById('range-slider-soc') as HTMLInputElement)?.value
 			);
 			const ecoCheckbox = (document.getElementById('eco') as HTMLInputElement)?.checked;
+		
 			const chargePayload = {
 			cmd: {
 				SetMode: {
@@ -100,7 +114,7 @@
 
 			console.log('Testing charge payload' + JSON.stringify(chargePayload));
 			// Send the payload as a JSON string
-			// {"cmd":{"Setmode":{"cmd":{"Charge":{"amps":90,"eco":false,"soc_limit":16}}}}}
+			// {"cmd":{"SetMode":{"Charge":{"amps":90,"eco":false,"soc_limit":16}}}}
 			socket.send(JSON.stringify(chargePayload));
 		});
 		console.log('on mount');
@@ -152,7 +166,7 @@
 		<div class="place-self-center">
 			<h2>Mode Selection</h2>
 			<p>{value}</p>
-			<RadioGroup class="" rounded="rounded-container-token" display="flex-col">
+			<RadioGroup id="modeRadio" rounded="rounded-container-token" display="flex-col">
 				<RadioItem bind:group={value} name="justify" value="Idle">Idle</RadioItem>
 				<RadioItem bind:group={value} name="justify" value="V2h">Load matching</RadioItem>
 				<RadioItem bind:group={value} name="justify" value="Discharge">Discharge vehicle</RadioItem>
