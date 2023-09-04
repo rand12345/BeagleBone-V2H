@@ -49,6 +49,20 @@
 	let eventData = writable<EventData[]>([]);
 	let realTimeData = writable<RealTimeData>({});
 
+		function radioModeChange(event: Event) {
+			const mode = value;
+						const chargePayload = {
+			cmd: {
+				SetMode: mode
+				},
+			};
+						console.log('Testing mode payload' + JSON.stringify(chargePayload));
+			// Send the payload as a JSON string
+    // {"cmd": {"SetMode": "V2h"}}
+    // {"cmd": {"SetMode": "Idle"}}
+			// socket.send(JSON.stringify(chargePayload));
+		};
+
 	// subscribe to this and then update table
 	if (typeof WebSocket !== 'undefined') {
 		// This code will only run in the browser environment
@@ -75,19 +89,7 @@
 		});
 	}
 	onMount(() => {
-		document.getElementById('modeRadio')?.addEventListener('change', (event) => {
-			const mode = value;
-						const chargePayload = {
-			cmd: {
-				SetMode: mode
-				},
-			};
-						console.log('Testing mode payload' + JSON.stringify(chargePayload));
-			// Send the payload as a JSON string
-    // {"cmd": {"SetMode": "V2h"}}
-    // {"cmd": {"SetMode": "Idle"}}
-			socket.send(JSON.stringify(chargePayload));
-		});
+		
 		document.getElementById('chargeForm')?.addEventListener('submit', (event) => {
 			event.preventDefault(); // Prevent the default form submission
 
@@ -167,9 +169,9 @@
 			<h2>Mode Selection</h2>
 			<p>{value}</p>
 			<RadioGroup id="modeRadio" rounded="rounded-container-token" display="flex-col">
-				<RadioItem bind:group={value} name="justify" value="Idle">Idle</RadioItem>
-				<RadioItem bind:group={value} name="justify" value="V2h">Load matching</RadioItem>
-				<RadioItem bind:group={value} name="justify" value="Discharge">Discharge vehicle</RadioItem>
+				<RadioItem  on:click={radioModeChange} bind:group={value} name="justify" value="Idle">Idle</RadioItem>
+				<RadioItem  on:click={radioModeChange} bind:group={value} name="justify" value="V2h">Load matching</RadioItem>
+				<RadioItem  on:click={radioModeChange} bind:group={value} name="justify" value="Discharge">Discharge vehicle</RadioItem>
 				<!-- <RadioItem bind:group={value} name="justify" value="Charge">Charge Vehicle</RadioItem> -->
 			</RadioGroup>
 		</div>
