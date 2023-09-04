@@ -2,6 +2,22 @@ use crate::MAX_AMPS;
 use serde::{Deserialize, Serialize};
 use std::ops::Deref;
 
+#[cfg(test)]
+mod test {
+    use super::*;
+    #[test]
+    fn test_json() {
+        let cp = ChargeParameters {
+            amps: Some(15),
+            eco: Some(false),
+            soc_limit: Some(80),
+        };
+        let op = OperationMode::Charge(cp);
+        let json = serde_json::to_string(&op).unwrap();
+        println!("{json}")
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy)]
 pub struct ChargeParameters {
     amps: Option<u8>,
