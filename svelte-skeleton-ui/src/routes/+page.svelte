@@ -1,13 +1,20 @@
-<!-- YOU CAN DELETE EVERYTHING IN THIS PAGE -->
+<!-- 
+
+	Todo:
+
+		Change header/nav colour based on mode - https://www.skeleton.dev/docs/themes
+
+		Fix CHAdeMO disconnect - wait for vehicle CAN to time out before stopping (with timeout)
+
+ -->
 <script lang="ts">
 	import { RangeSlider, tableSourceValues } from '@skeletonlabs/skeleton';
-	import { RadioGroup, RadioItem } from '@skeletonlabs/skeleton';
+	import { ListBoxItem, ListBox } from '@skeletonlabs/skeleton';
 	import { ProgressRadial, tableMapperValues } from '@skeletonlabs/skeleton';
 	// import type { TableSource } from '@skeletonlabs/skeleton';
 	import { onMount } from 'svelte';
 	import { readable, writable } from 'svelte/store';
 
-	
 	interface RangeSliderProps {
 		value: number;
 		min: number;
@@ -22,13 +29,11 @@
 		action: string;
 	}
 
-	interface ChargeOptions{
-			amps?: number;
-			eco?: boolean;
-			soc_limit?: number;
-		
+	interface ChargeOptions {
+		amps?: number;
+		eco?: boolean;
+		soc_limit?: number;
 	}
-
 
 	// Define interfaces for your data
 	interface EventData {
@@ -37,6 +42,7 @@
 	}
 
 	interface RealTimeData {
+		time?: string;
 		soc?: number;
 		state?: string;
 		temp?: number;
@@ -47,21 +53,52 @@
 	let socket: WebSocket; // Define socket here to make it accessible throughout the component
 	let time = '';
 	let eventData = writable<EventData[]>([]);
-	let realTimeData = writable<RealTimeData>({});
+	let realTimeData = writable<RealTimeData[]>([]);
 
-		function radioModeChange(event: Event) {
-			const mode = value;
-						const chargePayload = {
+	function submitCustomCharge(event: Event) {
+		event.preventDefault(); // Prevent the default form submission
+
+		// Get form elements by their IDs
+		const ampsValue = Number(
+			(document.getElementById('range-slider-amps') as HTMLInputElement)?.value
+		);
+		const socRangeValue = Number(
+			(document.getElementById('range-slider-soc') as HTMLInputElement)?.value
+		);
+		const ecoCheckbox = (document.getElementById('eco') as HTMLInputElement)?.checked;
+
+		const chargePayload = {
+			cmd: {
+				SetMode: {
+					Charge: {
+						amps: ampsValue,
+						eco: ecoCheckbox,
+						soc_limit: socRangeValue
+					}
+				}
+			}
+		};
+
+		console.log('Testing charge payload' + JSON.stringify(chargePayload));
+		// Send the payload as a JSON string
+		// {"cmd":{"SetMode":{"Charge":{"amps":90,"eco":false,"soc_limit":16}}}}
+		socket.send(JSON.stringify(chargePayload));
+	}
+
+	function radioModeChange(event: Event) {
+		const mode = value;
+		const chargePayload = {
 			cmd: {
 				SetMode: mode
-				},
-			};
-						console.log('Testing mode payload' + JSON.stringify(chargePayload));
-			// Send the payload as a JSON string
-    // {"cmd": {"SetMode": "V2h"}}
-    // {"cmd": {"SetMode": "Idle"}}
-			// socket.send(JSON.stringify(chargePayload));
+			}
 		};
+		console.log(JSON.stringify(event));
+		console.log('Testing mode payload' + JSON.stringify(chargePayload));
+		// Send the payload as a JSON string
+		// {"cmd": {"SetMode": "V2h"}}
+		// {"cmd": {"SetMode": "Idle"}}
+		socket.send(JSON.stringify(chargePayload));
+	}
 
 	// subscribe to this and then update table
 	if (typeof WebSocket !== 'undefined') {
@@ -78,47 +115,25 @@
 		// This will be triggered when the WebSocket messages arrive
 		socket.addEventListener('message', (event: MessageEvent) => {
 			const message = JSON.parse(event.data);
+			console.log(JSON.stringify(message));
 			if (message.Events) {
-				console.log(JSON.stringify(event.data));
 				eventData.set(message.Events);
 			}
 			if (message.Data) {
-				time = new Date().toLocaleTimeString();
-				realTimeData.set(message.Data);
+				message.Data.time = new Date().toLocaleTimeString();
+				// $realTimeData.push(message.Data);
+				realTimeData.update((items) => {
+					items.unshift(message.Data);
+					if (items.length > 80) {
+						items.pop();
+					}
+					return items;
+				});
+				// console.log($realTimeData.length);
 			}
 		});
 	}
 	onMount(() => {
-		
-		document.getElementById('chargeForm')?.addEventListener('submit', (event) => {
-			event.preventDefault(); // Prevent the default form submission
-
-			// Get form elements by their IDs
-			const socRangeValue = Number(
-				(document.getElementById('range-slider-amps') as HTMLInputElement)?.value
-			);
-			const ampsValue = Number(
-				(document.getElementById('range-slider-soc') as HTMLInputElement)?.value
-			);
-			const ecoCheckbox = (document.getElementById('eco') as HTMLInputElement)?.checked;
-		
-			const chargePayload = {
-			cmd: {
-				SetMode: {
-					Charge: {
-						amps: ampsValue,
-						eco: ecoCheckbox,
-						soc_limit: socRangeValue,
-						},	
-					},
-				},
-			};
-
-			console.log('Testing charge payload' + JSON.stringify(chargePayload));
-			// Send the payload as a JSON string
-			// {"cmd":{"SetMode":{"Charge":{"amps":90,"eco":false,"soc_limit":16}}}}
-			socket.send(JSON.stringify(chargePayload));
-		});
 		console.log('on mount');
 		if (socket) {
 			async function fetchData() {
@@ -163,22 +178,35 @@
 	};
 </script>
 
-<div class="container h-full mx-auto flex justify-center items-center">
-	<div class="space-y-10 text-center flex flex-col items-center">
-		<div class="place-self-center">
-			<h2>Mode Selection</h2>
-			<p>{value}</p>
-			<RadioGroup id="modeRadio" rounded="rounded-container-token" display="flex-col">
-				<RadioItem  on:click={radioModeChange} bind:group={value} name="justify" value="Idle">Idle</RadioItem>
-				<RadioItem  on:click={radioModeChange} bind:group={value} name="justify" value="V2h">Load matching</RadioItem>
-				<RadioItem  on:click={radioModeChange} bind:group={value} name="justify" value="Discharge">Discharge vehicle</RadioItem>
-				<!-- <RadioItem bind:group={value} name="justify" value="Charge">Charge Vehicle</RadioItem> -->
-			</RadioGroup>
-		</div>
-		<div class="place-self-center">
+<!-- <div class="container h-full mx-auto flex justify-center items-center"> -->
+<!-- <div class="space-y-10 text-center flex flex-row items-center"> -->
+<!-- <div id="overlay">
+	<div id="messageBox">
+		<div id="connectionStatus">Attempting to establish WebSocket connection...</div>
+	</div>
+</div> -->
+<br />
+<div class=" container mx-auto px-4 flex flex-wrap gap-2 md:grid-cols-3">
+	<!-- <div class=" m-auto grid card p-10 col-span-2"> -->
+	<div class="w-80 grow md:grow-0 card p-10">
+		<h2>Mode Selection {value}</h2>
+		<ListBox id="modeRadio" rounded="rounded-container-token" display="flex-row">
+			<ListBoxItem on:change={radioModeChange} bind:group={value} name="justify" value="Idle"
+				>Idle</ListBoxItem
+			>
+			<ListBoxItem on:change={radioModeChange} bind:group={value} name="justify" value="V2h"
+				>Load matching</ListBoxItem
+			>
+			<ListBoxItem on:change={radioModeChange} bind:group={value} name="justify" value="Discharge"
+				>Discharge vehicle</ListBoxItem
+			>
+			<!-- <RadioItem bind:group={value} name="justify" value="Charge">Charge Vehicle</RadioItem> -->
+		</ListBox>
+		<br />
+		<div>
 			<h2>Manual Charge Parameters</h2>
 			<form id="chargeForm">
-				<div class="grid container-fluid">
+				<div class="">
 					<RangeSlider
 						name="soc"
 						id="range-slider-soc"
@@ -213,18 +241,23 @@
 					</label>
 				</div>
 				<br />
-				<button class="btn variant-filled" type="submit">Custom Charge</button>
+				<button on:click={submitCustomCharge} class="btn variant-filled" type="submit"
+					>Charge</button
+				>
 			</form>
 		</div>
+	</div>
+	<!-- </div> -->
 
+	<div class="flex-auto card p-10 max-h-[60vh] overflow-y-auto space-y-4">
 		<h2>Event Table</h2>
-		<table id="eventsTable">
+		<table id="eventsTable" class="table table-hover">
 			<thead>
 				<tr>
-					<th>Time</th>
-					<th>Action</th>
-					<th>Edit</th>
-					<th>Delete</th>
+					<th class="">Time</th>
+					<th class="">Action</th>
+					<th class="table-cell-fit">Edit</th>
+					<th class="table-cell-fit">Delete</th>
 				</tr>
 			</thead>
 			<tbody>
@@ -232,8 +265,8 @@
 					<tr>
 						<td>{event.time}</td>
 						<td>{event.action}</td>
-						<td><!-- Edit button here --></td>
-						<td><!-- Delete button here --></td>
+						<td><button type="button" class="btn btn-sm">📝</button></td>
+						<td><button type="button" class="btn btn-sm">❌</button></td>
 					</tr>
 				{/each}
 			</tbody>
@@ -242,28 +275,54 @@
 			<button id="addRowButton">Add Event</button>
 			<button id="updateButton">Update</button>
 		</div>
-
-		<h2>Graphing</h2>
-		<figure class="container-fluid">
-			<div id="plotContainer" />
-		</figure>
-		<div class="data_section">
-			<!-- <div id="connectionStatus">Attempting to establish WebSocket connection...</div> -->
-			<h2>Realtime data</h2>
-			<!-- {#each $realTimeData as data} -->
-			<p>Localtime {time}</p>
-			<p>SoC {$realTimeData.soc}%</p>
+		<!-- <div class="flex data_section">
+			Soc
 			<ProgressRadial value={$realTimeData.soc}>{$realTimeData.soc}%</ProgressRadial>
-			<p>State {$realTimeData.state}</p>
-			<p>Temperature {$realTimeData.temp}ºC</p>
-			<p>Fan duty {$realTimeData.fan}%</p>
-			<p>Amps {$realTimeData.amps}</p>
+			Load
 			<ProgressRadial value={Math.abs(($realTimeData.amps * 100) / 16)}
 				>{Math.floor(Math.abs(($realTimeData.amps * 100) / 16))}%</ProgressRadial
 			>
+		</div> -->
+	</div>
+
+	<div class="flex-auto card p-10 max-h-[25vh] overflow-y-auto space-y-4">
+		<div class="table table-hover">
+			<!-- <div id="connectionStatus">Attempting to establish WebSocket connection...</div> -->
+			<table id="dataTable" class="table-container">
+				<thead>
+					<tr>
+						<th class="table-cell-fit">Localtime</th>
+						<th>SoC</th>
+						<th>State</th>
+						<th>Temperature</th>
+						<th>Fan duty</th>
+						<th>Amps</th>
+					</tr>
+				</thead>
+				<tbody>
+					{#each $realTimeData as rtd}
+						<tr>
+							<td>{rtd.time}</td>
+							<td>{rtd.soc}%</td>
+							{#if typeof rtd.state === 'object'}
+								<td>{Object.keys(rtd.state)[0]}</td>
+							{:else}
+								<td>{rtd.state}</td>
+							{/if}
+							<td>{rtd.temp}ºC</td>
+							<td>{rtd.fan}%</td>
+							<td>{rtd.amps}A</td>
+						</tr>
+					{/each}
+				</tbody>
+			</table>
 		</div>
 	</div>
 </div>
+
+<!-- </div> -->
+
+<!-- </div> -->
 
 <style lang="postcss">
 	figure {

@@ -1,19 +1,18 @@
-use super::can::*;
-use super::fans::*;
-use super::pwm::Pwm;
-use super::{cmd_list, PreCharger, PreCommand, BB_PWM_CHIP, BB_PWM_NUMBER, PREDATA};
-// use crate::chademo::state;
-use crate::chademo::state::pin_init_out_high;
-use crate::chademo::state::PREACPIN;
-use crate::data_io::mqtt::CHADEMO_DATA;
-use crate::error::IndraError;
-// use crate::eventbus::{Event, EvtBus};
-use crate::log_error;
-use crate::statics::PreRxMutex;
+use super::{
+    can::*, cmd_list, fans::*, pwm::Pwm, PreCharger, PreCommand, BB_PWM_CHIP, BB_PWM_NUMBER,
+    PREDATA,
+};
+use crate::{
+    chademo::state::{pin_init_out_high, PREACPIN},
+    data_io::mqtt::CHADEMO_DATA,
+    error::IndraError,
+    log_error,
+    pre_charger::PreState,
+    statics::PreRxMutex,
+};
 use std::time::Duration;
 use sysfs_gpio::Pin;
-use tokio::time::sleep;
-use tokio::time::{timeout, Instant};
+use tokio::time::{sleep, timeout, Instant};
 use tokio_socketcan::CANFrame;
 
 pub async fn init(pre_rx_m: PreRxMutex) -> Result<(), IndraError> {
@@ -33,7 +32,7 @@ pub async fn init(pre_rx_m: PreRxMutex) -> Result<(), IndraError> {
     let result = initalise_pre(t100ms, &mut can_socket, &mut pre).await;
     log::warn!("Init {result:?}");
 
-    pre.set_state(crate::pre_charger::PreState::Init);
+    pre.set_state(PreState::Init);
 
     {
         *predata.lock().await = pre; // copy data
@@ -41,7 +40,7 @@ pub async fn init(pre_rx_m: PreRxMutex) -> Result<(), IndraError> {
 
     enabled_wait(t100ms, &mut can_socket, &mut pre).await;
 
-    pre.set_state(crate::pre_charger::PreState::Online);
+    pre.set_state(PreState::Online);
 
     let cmd_list = cmd_list();
     let mut pre_rx = pre_rx_m.lock().await;
@@ -54,16 +53,14 @@ pub async fn init(pre_rx_m: PreRxMutex) -> Result<(), IndraError> {
         while instant.elapsed().as_millis().le(&70) {
             while let Ok(Some(cmd)) = timeout(Duration::from_millis(10), pre_rx.recv()).await {
                 log::debug!("Received {cmd:?}");
-                if matches!(cmd, PreCommand::Shutdown) {
-                    use crate::pre_charger::PreState::Offline;
-                    predata.lock().await.set_state(Offline);
-                    pre_ac_contactor
-                        .set_value(0)
-                        .map_err(|e| IndraError::PinAccess(e))?;
-                    return Ok(());
-                } else {
+                if !matches!(cmd, PreCommand::Shutdown) {
                     write_pre(cmd, &mut can_socket, t100ms / 10, &mut pre).await;
                 }
+                let mut data = predata.lock().await;
+
+                fan.remove().await;
+                data.set_state(PreState::Offline);
+                data.fan_duty(1);
             }
         }
 
@@ -73,6 +70,13 @@ pub async fn init(pre_rx_m: PreRxMutex) -> Result<(), IndraError> {
         }
         if let Ok(mut data) = CHADEMO_DATA.try_lock() {
             data.from_pre(pre);
+        };
+        if matches!(PreState::Offline, data.state) {
+            pre_ac_contactor
+                .set_value(0)
+                .map_err(|e| IndraError::PinAccess(e))?;
+            log::warn!("Pre AC contactor opened");
+            return Ok(());
         };
         println!("{}", pre);
         if instant.elapsed().as_millis().gt(&100) {
