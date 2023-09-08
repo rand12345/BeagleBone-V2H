@@ -14,7 +14,7 @@ overflow-checks = true
 
 [profile.release]
 iopt-level = "z"
-# lto = "fat"
-codegen-units = 1
+lto = "thin"
+# codegen-units = 4
 [patch.crates-io]
 chademo_v2 = {path = "chademo_v2"}

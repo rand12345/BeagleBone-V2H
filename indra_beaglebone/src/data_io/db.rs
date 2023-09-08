@@ -1,4 +1,5 @@
 use chrono::Duration;
+use serde::{Deserialize, Serialize};
 use sqlx::sqlite::SqliteQueryResult;
 use sqlx::{migrate::MigrateDatabase, Sqlite, SqlitePool};
 use sqlx::{
@@ -8,34 +9,45 @@ use sqlx::{
     },
     FromRow,
 };
+use sqlx_core::pool::PoolOptions;
 use std::error::Error;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout, Instant};
 
 use crate::error::IndraError;
+use crate::POOL;
 
 use super::meter::METER;
 use super::mqtt::{MqttChademo, CHADEMO_DATA};
 
 const DB_URL: &str = "sqlite://database.db";
 
-pub async fn init(update_secs: u64) -> Result<(), IndraError> {
-    let db = Database::new().await?;
+pub async fn init(update_millisecs: u64) -> Result<(), IndraError> {
     let row_data = CHADEMO_DATA.clone();
+    let update_period = std::time::Duration::from_millis(update_millisecs);
     loop {
-        sleep(std::time::Duration::from_secs(update_secs)).await;
-        let row = row_data.lock().await;
+        let instant = Instant::now();
+
+        let row = *row_data.read().await;
         if row.state.is_inactive() {
             // only record activity
+            sleep(std::time::Duration::from_secs(1)).await;
             continue;
         }
-        match db.add_record(&(*row).into()).await {
-            Ok(sql) => log::info!("#{} db row added", sql.last_insert_rowid()),
-            Err(e) => log::error!("db {e:?}"),
+
+        if let Some(db) = POOL.get() {
+            match db.add_record(&(row).into()).await {
+                Ok(sql) => log::info!("#{} db row added", sql.last_insert_rowid()),
+                Err(e) => log::error!("db {e:?}"),
+            };
         };
+        let remaining = update_period - instant.elapsed();
+        if remaining.as_millis().gt(&1) {
+            sleep(remaining).await
+        }
     }
 }
 
-#[derive(Clone, FromRow, Debug)]
+#[derive(Clone, FromRow, Debug, Serialize, Deserialize)]
 pub struct ChademoDbRow {
     pub id: u32,
     pub timestamp: chrono::DateTime<Utc>,
@@ -50,9 +62,9 @@ pub struct ChademoDbRow {
 }
 impl From<MqttChademo> for ChademoDbRow {
     fn from(value: MqttChademo) -> Self {
-        let meter_kw = match METER.clone().try_lock() {
-            Ok(val) => *val * 0.001,
-            Err(_) => 0.0,
+        let meter_kw = match METER.clone().try_read().as_deref() {
+            Ok(Some(val)) => val * 0.001,
+            _ => 0.0,
         };
         Self {
             id: 0,
@@ -101,7 +113,9 @@ impl Database {
             println!("Database already exists");
             false
         };
-        let pool = SqlitePool::connect(DB_URL)
+        let pool = PoolOptions::new()
+            .max_connections(5)
+            .connect(DB_URL)
             .await
             .map_err(|_e| IndraError::Error)?;
 
@@ -111,10 +125,24 @@ impl Database {
         }
         Ok(db)
     }
+    pub async fn process_request(
+        &self,
+        request: Parameters,
+    ) -> Result<Vec<ChademoDbRow>, Box<dyn Error>> {
+        match request {
+            Parameters::GetAllRecords => self.get_all_records().await,
+            Parameters::GetLastNRecords(n) => self.get_last_n_records(n).await,
+            Parameters::GetRecordsFromHours(h) => self.get_records_from_hours(h).await,
+            Parameters::GetRecordsBetween((now, then)) => {
+                self.get_records_between_hours(now, then).await
+            }
+        }
+    }
     pub async fn add_record(
         &self,
         record: &ChademoDbRow,
     ) -> Result<SqliteQueryResult, Box<dyn Error>> {
+        let mut conn = self.pool.acquire().await?;
         Ok(sqlx::query("INSERT INTO sensor_readings (timestamp, dc_kw, soc, volts, temp, amps, requested_amps, fan, meter_kw) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
             .bind(Utc::now())
             .bind(record.dc_kw)
@@ -125,28 +153,46 @@ impl Database {
             .bind(record.requested_amps)
             .bind(record.fan)
             .bind(record.meter_kw)
-            .execute(&self.pool)
+            .execute(&mut *conn)
             .await
             ?)
     }
-    pub async fn _get_all_records(&self) -> Result<Vec<ChademoDbRow>, Box<dyn Error>> {
+    pub async fn get_all_records(&self) -> Result<Vec<ChademoDbRow>, Box<dyn Error>> {
         Ok(
             sqlx::query_as::<_, ChademoDbRow>("SELECT * FROM sensor_readings")
                 .fetch_all(&self.pool)
                 .await?,
         )
     }
-    async fn _get_records_from_hours(
-        &mut self,
-        hours: i64,
+    pub async fn get_last_n_records(&self, n: usize) -> Result<Vec<ChademoDbRow>, Box<dyn Error>> {
+        let query = format!(
+            "SELECT * FROM sensor_readings ORDER BY timestamp DESC LIMIT {}",
+            n
+        );
+
+        Ok(sqlx::query_as::<_, ChademoDbRow>(&query)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+    async fn get_records_from_hours(
+        &self,
+        hours: impl Into<i64>,
     ) -> Result<Vec<ChademoDbRow>, Box<dyn Error>> {
         let now = Utc::now();
-        let hours_ago = now - Duration::seconds(hours * 3600);
+        let hours_ago = now - Duration::seconds(hours.into() * 3600);
+        Ok(self.get_records_between_hours(hours_ago, now).await?)
+        // let hours_ago = now - Duration::seconds(hours * 3600);
+    }
+    async fn get_records_between_hours(
+        &self,
+        then: impl Into<DateTime<Utc>>,
+        now: impl Into<DateTime<Utc>>,
+    ) -> Result<Vec<ChademoDbRow>, Box<dyn Error>> {
         Ok(sqlx::query_as::<_, ChademoDbRow>(
             "SELECT * FROM sensor_readings WHERE timestamp BETWEEN ? AND ?",
         )
-        .bind(hours_ago)
-        .bind(now)
+        .bind(then.into())
+        .bind(now.into())
         .fetch_all(&self.pool)
         .await?)
     }
@@ -172,6 +218,15 @@ impl Database {
         Ok(())
     }
 }
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Parameters {
+    GetAllRecords,
+    GetLastNRecords(usize),
+    GetRecordsFromHours(i64),
+    GetRecordsBetween((DateTime<Utc>, DateTime<Utc>)),
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -191,7 +246,7 @@ mod test {
         assert!(result.is_ok());
         println!("Query result: {:?}", result);
 
-        let results = db._get_all_records().await;
+        let results = db.get_all_records().await;
         for result in results.unwrap() {
             println!("[{:?}] ", result);
         }

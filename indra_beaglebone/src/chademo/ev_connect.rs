@@ -10,8 +10,10 @@ use crate::{
     log_error,
     meter::METER,
     pre_charger::{
+        fans::Fan,
         pre_thread::{self},
-        PreCharger, PreCommand, PREDATA,
+        pwm::Pwm,
+        PreCharger, PreCommand, BB_PWM_CHIP, BB_PWM_NUMBER, PREDATA,
     },
     statics::{self, *},
     timeout_condition, MAX_AMPS, MAX_SOC, METER_BIAS, MIN_SOC,
@@ -49,6 +51,12 @@ pub async fn ev100ms(led_tx: LedTx, mode_rx: ChademoRx) -> Result<(), IndraError
         chademo.set_state(OperationMode::Idle);
         update_panel_leds(&led_tx, &chademo).await;
         update_chademo_mutex(&chademo).await;
+        {
+            // fan fudge
+            let pwm = Pwm::new(BB_PWM_CHIP, BB_PWM_NUMBER, 1000).unwrap(); // number depends on chip, etc.
+            Fan::new(pwm).update(10.0);
+            // fan.update(10.0);
+        }
         let mut can = tokio_socketcan::CANSocket::open(&"can1").map_err(|_| IndraError::Error)?;
         {
             if let Some(state) = mode_rx.clone().lock().await.recv().await {
@@ -77,18 +85,12 @@ pub async fn ev100ms(led_tx: LedTx, mode_rx: ChademoRx) -> Result<(), IndraError
             };
             continue;
         }
-        // let mut ev_connect_timeout: Option<Instant> = Some(Instant::now());
-
-        //
-        // Spawn a watchdog timer which changed OP to Idle after timeout
-        //
         log::info!("{:?} active", chademo.state());
-
         // Spawn new task
         let handle = tokio::spawn(pre_thread::init(pre_rx.clone()));
         log::info!("Spawned new Pre thread {}", handle.id());
         handles.push(handle);
-
+        chademo.charge_stop();
         chademo.pins().pre_ac.set_value(1).unwrap();
         if let Err(e) = init_pre(&predata, t100ms, &pre_tx).await {
             log::error!("Pre init failed - {e:?}");
@@ -99,15 +101,11 @@ pub async fn ev100ms(led_tx: LedTx, mode_rx: ChademoRx) -> Result<(), IndraError
             continue;
         };
         chademo.x109.status = X109Status::from(0x20);
-        assert!(!chademo.x109.status.status_vehicle_connector_lock);
         assert!(!chademo.x109.status.status_station);
+        assert!(!chademo.x109.status.status_vehicle_connector_lock);
         log::info!("Raise D1");
         log_error!("Setting D1 high", chademo.pins().d1.set_value(1));
-        update_chademo_mutex(&chademo).await;
 
-        chademo.plug_lock(true).expect("Plug lock failed");
-        chademo.x109.status = X109Status::from(0x24);
-        assert!(chademo.x109.status.status_vehicle_connector_lock);
         log::info!("Check can frames & Wait for K line");
         if let Err(e) = k_line(&mut can, &mut chademo).await {
             log::error!("K line init failed - is car connected? {e:?}");
@@ -118,12 +116,17 @@ pub async fn ev100ms(led_tx: LedTx, mode_rx: ChademoRx) -> Result<(), IndraError
             continue;
         };
 
+        chademo.plug_lock(true).expect("Plug lock failed");
+        assert!(!chademo.x109.status.status_station);
+        assert!(chademo.x109.status.status_vehicle_connector_lock);
+        // update_chademo_mutex(&chademo).await;
         // chademo.precharge();
         log::info!("insulation tests skipped !!!");
         chademo.pins().d2.set_value(1).unwrap();
 
-        update_chademo_mutex(&chademo).await;
+        // update_chademo_mutex(&chademo).await;
         log::info!("when voltage match - raise D2");
+        chademo.charge_start();
         if let Err(e) = precharge(&mut can, &mut chademo, &pre_tx, &predata).await {
             log::error!("precharge & contactor init failed - should be catastropic and hang {e:?}");
 
@@ -132,12 +135,12 @@ pub async fn ev100ms(led_tx: LedTx, mode_rx: ChademoRx) -> Result<(), IndraError
             update_chademo_mutex(&chademo).await;
             continue;
         }
-        chademo.charge_start();
+        log::info!("precharge left");
         chademo.x109.status = X109Status::from(0x05);
         assert!(chademo.x109.status.status_vehicle_connector_lock);
         assert!(chademo.x109.status.status_station);
         update_panel_leds(&led_tx, &chademo).await;
-        update_chademo_mutex(&chademo).await;
+        // update_chademo_mutex(&chademo).await;
 
         log::info!("            Entering charge loop!");
         let exit_reason =
@@ -151,65 +154,71 @@ pub async fn ev100ms(led_tx: LedTx, mode_rx: ChademoRx) -> Result<(), IndraError
 
         // end charge ========================================================
 
-        log::warn!("End of init fn 'end charge'");
+        log::warn!("End of init fn 'end charge' with exit reason {exit_reason:?}");
         update_chademo_mutex(&chademo).await;
         chademo.x109.status = X109Status::from(0x24);
-        chademo.charging_stop_control_release();
+        // chademo.charging_stop_control_release();
         log_error!("Shutdown pre", pre_tx.send(PreCommand::Shutdown).await);
-        let mut contactors = true;
-        loop {
-            match timeout(
-                Duration::from_millis(200),
-                recv_send(&mut can, &mut chademo, false),
-            )
-            .await
-            {
-                Ok(Ok(_)) => (),
-                Ok(Err(e)) => {
-                    log::error!("CAN error on closure {e?}");
-                    if !contactors && !chademo.x102.status.status_vehicle {
-                        break;
-                    }
-                }
-                Err(e) => {
-                    log::warn!("CAN timed out on closure {e?}");
-                    if !contactors && !chademo.x102.status.status_vehicle {
-                        break;
-                    }
-                }
-            };
-
-            if matches!(chademo.pins().k.get_value(), Ok(0)) {
-                continue;
-            };
-            if contactors {
-                log::info!("Contactors opening");
-                if chademo.pins().c1.set_value(0).is_ok() {
-                    print!("\x07");
-                    if chademo.pins().c2.set_value(0).is_ok() {
-                        print!("\x07");
-                        warn!("                                       !!!!CONTACTORS OPEN!!!!");
-
-                        contactors = false;
-                    }
-                }
-            } else {
-                log::warn!("Conditions not yet met for contactor open");
-                continue;
-            }
-
-            chademo.x109.status = X109Status::from(0x20); // make this an enum
-                                                          // if !chademo.x102.status.status_vehicle {
-                                                          //     break;
-                                                          // }
-        }
+        shutdown(&mut chademo, &mut can).await;
         log::warn!("Charge/discharge mode ended");
-
-        if matches!(exit_reason, crate::global_state::OperationMode::Quit) {
+        update_chademo_mutex(&chademo).await;
+        if matches!(exit_reason, OperationMode::Quit) {
             return Ok(());
         }
         drop(can);
         //loops back to idleß
+    }
+}
+
+async fn shutdown(chademo: &mut Chademo, can: &mut CANSocket) {
+    let mut contactors = true;
+    loop {
+        log::debug!("{}", chademo.x102.status);
+        match timeout(Duration::from_millis(200), recv_send(can, chademo, false)).await {
+            Ok(Ok(_)) => (),
+            Ok(Err(e)) => {
+                log::error!("CAN error on closure {:?}", e);
+                if !contactors {
+                    break;
+                }
+            }
+            Err(e) => {
+                log::warn!("CAN timed out on closure {:?}", e);
+                if !contactors {
+                    break;
+                }
+            }
+        };
+
+        if matches!(chademo.pins().k.get_value(), Ok(0)) {
+            log::info!("Awaiting K line release");
+            continue;
+        };
+        if contactors {
+            log::info!("Contactors opening");
+            if chademo.pins().c1.set_value(0).is_ok() {
+                print!("\x07");
+                if chademo.pins().c2.set_value(0).is_ok() {
+                    print!("\x07");
+                    warn!("                                       !!!!CONTACTORS OPEN!!!!");
+
+                    contactors = false;
+                    chademo.x109.status = X109Status::from(0x25);
+                    continue;
+                }
+            }
+        };
+        if !chademo.x109.status.status_vehicle_connector_lock {
+            break;
+        }
+        {
+            if PREDATA.clone().lock().await.get_dc_output_volts() < 10.0 {
+                chademo.x109.status = X109Status::from(0x20); // make this an enum
+                                                              // if !chademo.x102.status.status_vehicle {
+            } //     break;
+              // }
+            log_error!("Pluglock disable", chademo.plug_lock(false));
+        }
     }
 }
 fn reset_gpio_state(chademo: &mut Chademo) {
@@ -235,8 +244,9 @@ async fn charge_mode(
     let mut mode_rx = mode_rx.lock().await;
     let mut last_soc = *chademo.soc();
     let mut last_volts = 0.0;
-    let mut last_amps = 0.0;
-    let mut feedback = 0.01;
+    let mut last_amps = 1.0;
+    let mut last_meter = 0.01;
+    let mut counter = 0;
     use crate::global_state::OperationMode::*;
 
     let exit_reason = loop {
@@ -246,50 +256,66 @@ async fn charge_mode(
             recv_send(can, chademo, false).await?;
             if !chademo.status_vehicle_charging() {
                 log::warn!("EV stopped charge");
+                dbg!(&chademo);
                 break Idle;
             }
         };
 
+        if counter > 10 || counter == 0 {
+            let x102status: u8 = chademo.x102.status.into();
+            let x109status: u8 = chademo.x109.status.into();
+
+            log::info!(
+                "102s:{:02x}, 109s:{:02x}, Soc:{}% Req:{}A",
+                x102status,
+                x109status,
+                chademo.soc(),
+                chademo.x102.charging_current_request
+            );
+            counter = 0
+        }
+        counter += 1;
         {
             // listen for incomming mode changes
             if let Ok(op) = mode_rx.try_recv() {
-                let op = match (chademo.state(), op) {
-                    (V2h, V2h) => Idle,
-                    (V2h, Charge(p)) => Charge(p),
-                    (_, Idle) => Idle,
-                    (Charge(_), V2h) => V2h,
-                    (_, Discharge(p)) => Discharge(p),
-                    (_, Quit) => Quit,
-                    _ => *chademo.state(),
-                };
                 update_panel_leds(&led_tx, &chademo).await;
                 log::info!("New CHAdeMO mode received {op:?}");
-                chademo.set_state(op)
+                chademo.set_state(op);
+                update_chademo_mutex(chademo).await;
             }
             // update_panel_leds(&led_tx, &chademo).await
         }
-        update_chademo_mutex(chademo).await;
 
         let op = chademo.state();
 
         let charging_current_request = match *op {
-            V2h => amps_meter_profiler(&mut feedback, &last_amps, &*chademo).await,
+            V2h => amps_meter_profiler(&mut last_meter, &last_amps, &*chademo).await?,
             Discharge(d) => match handle_discharge_mode(&d, &chademo).await {
                 Some(amps) => amps,
-                None => break Idle,
+                None => {
+                    chademo.request_stop_charge();
+                    continue;
+                }
             },
             Charge(c) => match c.get_eco() {
                 false => match handle_charge_mode(&c, &chademo).await {
                     Some(amps) => amps,
-                    None => break Idle,
+                    None => {
+                        chademo.request_stop_charge();
+                        continue;
+                    }
                 },
-                true => amps_meter_profiler(&mut feedback, &last_amps, &*chademo)
-                    .await
+                true => amps_meter_profiler(&mut last_meter, &last_amps, &*chademo)
+                    .await?
                     .clamp(0.0, MAX_AMPS as f32), //
             },
-            Quit | Idle => break *op,
+            Quit | Idle => {
+                chademo.request_stop_charge();
+                continue;
+            }
             _ => continue,
         };
+
         if &last_volts != chademo.target_voltage() {
             last_volts = *chademo.target_voltage();
             log_error!(
@@ -300,9 +326,9 @@ async fn charge_mode(
 
         // testing!!!!!!!
         // chademo.update_dynamic_charge_limits(charging_current_request);
-
-        if last_amps != charging_current_request as f32 {
-            last_amps = charging_current_request as f32;
+        // let charging_current_request = chademo.x102.charging_current_request as f32;
+        if last_amps != charging_current_request {
+            last_amps = charging_current_request;
             log_error!(
                 "",
                 pre_tx
@@ -353,11 +379,12 @@ async fn init_pre(
     let mut c = false;
     let mut counter = 0;
     while !c {
-        if counter > 10 {
+        if counter > 20 {
+            log::error!("Initalise PRE stage 1 timed out after {counter}s");
             return Err(IndraError::Timeout);
         }
-        counter += 1;
         sleep(Duration::from_millis(1000)).await;
+        counter += 1;
         let pre = predata.lock().await;
         c = pre.get_state().is_online()
     }
@@ -370,13 +397,15 @@ async fn init_pre(
     c = false;
     counter = 0;
     while !c {
-        if counter > 50 {
+        if counter > 5 {
+            log::error!("Initalise PRE stage 2 timed out after {counter}s");
             return Err(IndraError::Timeout);
         }
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(1000)).await;
+        counter += 1;
         let pre = predata.lock().await;
         if pre.get_dc_setpoint_volts() as u16 == 370 && pre.get_dc_setpoint_amps() as u16 == 1 {
-            c = pre.get_dc_output_volts() as u16 == pre.get_dc_setpoint_volts() as u16;
+            c = pre.volts_equal();
         };
     }
 
@@ -389,14 +418,24 @@ async fn k_line(can: &mut CANSocket, chademo: &mut Chademo) -> Result<(), IndraE
     sleep(Duration::from_millis(100)).await;
     while counter != 0 {
         //100ms loop
+        // log::debug!("K-loop {counter}");
         recv_send(can, chademo, false).await?;
-        if matches!(chademo.pins().k.get_value(), Ok(0)) {
-            log::info!("K line ok");
-            if chademo.x102_status().status_vehicle_charging {
-                log::info!("102.5.0 ok");
-                return Ok(());
-            };
+
+        // log::info!("{}", chademo.x102.status);
+        if chademo.k_line_check()? {
+            log::info!("K && 102.5.0 ok");
+            let x102status: u8 = chademo.x102.status.into();
+            let x109status: u8 = chademo.x109.status.into();
+
+            log::info!(
+                "102s:{:02x}, 109s:{:02x}, Soc:{}%",
+                x102status,
+                x109status,
+                chademo.soc()
+            );
+            return Ok(());
         };
+
         counter -= 1
     }
     Err(IndraError::Timeout)
@@ -408,152 +447,145 @@ async fn precharge(
     pre_tx: &tokio::sync::mpsc::Sender<PreCommand>,
     predata: &Arc<Mutex<PreCharger>>,
 ) -> Result<(), IndraError> {
-    let mut old_soc = chademo.x102.state_of_charge;
-    let mut counter = 50u8;
+    let mut old_soc = 255;
+    let mut counter = 100u8;
     while counter != 0 {
         counter -= 1;
-        recv_send(can, chademo, false).await?;
+        recv_send(can, chademo, true).await?;
+        log::debug!("Counter {counter}");
+        let x102status: u8 = chademo.x102.status.into();
+        let x109status: u8 = chademo.x109.status.into();
 
-        let predata = predata.lock().await;
-        chademo.x109.output_voltage = predata.get_dc_output_volts();
-        chademo.update_amps(predata.get_dc_output_amps() as i16);
+        log::info!(
+            "102s:{:02x}, 109s:{:02x}, Soc:{}%",
+            x102status,
+            x109status,
+            chademo.soc()
+        );
 
-        // if x102.5.3
-        if chademo.status_vehicle_ok() {
-            if (10..=100).contains(chademo.soc()) && chademo.soc() != &old_soc {
+        if (10..=100).contains(chademo.soc()) {
+            if &old_soc != chademo.soc() {
                 old_soc = *chademo.soc();
-
                 log_error!(
                     format!("SoC at {}", chademo.soc()),
                     pre_tx
                         .send(PreCommand::DcVoltsSetpoint(chademo.soc_to_voltage()))
                         .await
                 );
-                continue; // allow pre to change voltage before proceeding
             }
-            if predata.volts_equal() {
-                log::info!("Contactors closing");
-                if chademo.pins().c1.set_value(1).is_ok() {
-                    print!("\x07");
-                    if chademo.pins().c2.set_value(1).is_ok() {
-                        print!("\x07");
-                        //109.5.5
-                        chademo.charging_stop_control_set();
-                        return Ok(());
+        }
+        if old_soc <= 100 {
+            let predata = predata.lock().await;
+            chademo.x109.output_voltage = predata.get_dc_output_volts();
+
+            // dbg!(chademo.x102);
+            // dbg!(chademo.x109);
+            if chademo.x102.contactors_closed() {
+                if predata.volts_equal() {
+                    if chademo.x102.car_ready() {
+                        // dbg!(&chademo);
+                        return chademo.close_contactors();
+                    } else {
+                        log::warn!("x102.5.0 low");
                     }
+                } else {
+                    log::warn!("Pre volts not equal");
                 }
             } else {
-                log::warn!("Pre volts not equal")
-            };
-        } else {
-            log::warn!("x102.5.3 high")
+                log::warn!("x102.5.3 high");
+            }
         }
+
+        // if x102.5.3
     }
     Err(IndraError::Timeout)
 }
 
 async fn amps_meter_profiler(
     feedback: &mut f32,
-    setpoint_amps_old: &f32,
+    last_setpoint_amps: &f32,
     chademo: &Chademo,
-) -> f32 {
-    let meter = *METER.lock().await + METER_BIAS;
-    let soc = *chademo.soc(); // Change this
-    if *feedback == meter && meter.is_normal() {
-        *setpoint_amps_old
+) -> Result<f32, IndraError> {
+    let meter = if let Some(val) = *METER.read().await {
+        val + METER_BIAS
     } else {
-        *feedback = meter;
+        return Err(IndraError::MeterOffline);
+    };
 
-        let setpoint_amps = setpoint_amps_old - (meter / chademo.x109.output_voltage) * 0.45;
+    if *feedback == meter && meter.is_normal() {
+        return Ok(*last_setpoint_amps);
+    }
 
-        let setpoint_amps = setpoint_amps.clamp(-1.0 * MAX_AMPS as f32, MAX_AMPS as f32);
+    *feedback = meter;
 
-        // Check against SoC limits and EV throttling
+    let setpoint_amps = calculate_setpoint_amps(last_setpoint_amps, meter, chademo);
+    Ok(limit_setpoint_amps(setpoint_amps, chademo))
+}
+
+fn calculate_setpoint_amps(last_setpoint_amps: &f32, meter: f32, chademo: &Chademo) -> f32 {
+    let setpoint_amps = last_setpoint_amps - (meter / chademo.x109.output_voltage) * 0.45;
+    setpoint_amps.clamp(
+        -1.0 * chademo.x200.maximum_discharge_current as f32,
+        chademo.x102.charging_current_request as f32,
+    )
+}
+
+fn limit_setpoint_amps(setpoint_amps: f32, chademo: &Chademo) -> f32 {
+    let soc = *chademo.soc();
+    if matches!(chademo.state(), OperationMode::V2h) {
         if MIN_SOC >= soc && setpoint_amps.is_sign_negative() {
             warn!("SoC: {} too low, discharge disabled", soc);
             0.0
         } else if MAX_SOC <= soc && setpoint_amps.is_sign_positive() {
             warn!("SoC: {} too high, charge disabled", soc);
             0.0
-        // Restrict charging
         } else if setpoint_amps.is_sign_positive()
             && setpoint_amps > chademo.x102.charging_current_request as f32
         {
             warn!(
-                "Charge taper: {setpoint_amps}A too high, charge restricted to {}A",
-                chademo.x102.charging_current_request
+                "Charge taper: {}A too high, charge restricted to {}A",
+                setpoint_amps, chademo.x102.charging_current_request
             );
-            chademo.x102.charging_current_request as f32
+            setpoint_amps.min(chademo.x102.charging_current_request as f32)
         } else {
             setpoint_amps
         }
+    } else {
+        setpoint_amps
     }
 }
 
-#[inline]
+// #[inline]
 async fn update_chademo_mutex(chademo: &Chademo) {
-    CHADEMO_DATA.clone().lock().await.from_chademo(*chademo);
+    log::warn!("Accessing CHADEMO_DATA as write");
+    if let Ok(mut w) = CHADEMO_DATA.clone().try_write() {
+        w.from_chademo(&chademo);
+    } else {
+        log::warn!("Accessing CHADEMO_DATA write lock failed");
+    }
 }
 
-/*
-ndra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.600Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.601Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-2023-08-31T14:30:21.608Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.610Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.611Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-PRE: Charging EV 3254.16W, temp: 25.90ªC dc_output: 387.40V 8.40A, dc_output_setpoint: 410.00V 8.50A, fan: 0 enabled: true
-2023-08-31T14:30:21.695Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.697Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.698Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-2023-08-31T14:30:21.709Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.710Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.711Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-PRE: Charging EV 3294.60W, temp: 25.90ªC dc_output: 387.60V 8.50A, dc_output_setpoint: 410.00V 8.50A, fan: 0 enabled: true
-2023-08-31T14:30:21.795Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.797Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.798Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-2023-08-31T14:30:21.808Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.810Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.811Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-PRE: Charging EV 3292.90W, temp: 25.90ªC dc_output: 387.40V 8.50A, dc_output_setpoint: 410.00V 8.50A, fan: 0 enabled: true
-2023-08-31T14:30:21.897Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.898Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.899Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-PRE: Charging EV 3294.60W, temp: 25.90ªC dc_output: 387.60V 8.50A, dc_output_setpoint: 410.00V 8.50A, fan: 0 enabled: true
-2023-08-31T14:30:21.907Z DEBUG [indra_beaglebone::chademo::ev_connect] Update logo state Ok()
-2023-08-31T14:30:21.908Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED SoC Ok()
-2023-08-31T14:30:21.909Z DEBUG [indra_beaglebone::chademo::ev_connect] Update LED Energy Ok()
-PRE: Charging EV 3291.20W, temp: 25.90ªC dc_output: 387.20V 8.50A, dc_output_setpoint: 410.00V 8.50A, fa
-*/
-#[inline]
 async fn update_panel_leds(led_tx: &LedTx, chademo: &Chademo) {
-    // use crate::eventbus::Event::LedCommand;
-
-    log_error!(
-        "Update logo state",
-        led_tx.send(LedCommand::Logo(chademo.state().into())).await
-    );
-    let (soc, amps, neg) = if matches!(chademo.state(), &OperationMode::Idle) {
-        (0, 0, false) // Remove status bars from led panel
-    } else {
-        (
-            *chademo.soc(),
-            *chademo.output_amps(),
-            chademo.output_amps().is_negative(),
-        )
+    // Use a match statement to determine the LED state
+    let led_state = match chademo.state() {
+        OperationMode::Idle | OperationMode::Quit => {
+            // Remove status bars from led panel
+            LedCommand::SocBar(0)
+        }
+        _ => {
+            // Calculate amps as a percentage vs. max amps
+            let amps = (chademo.output_amps().abs() as u8).min(MAX_AMPS) as u32 * 100;
+            let neg = chademo.output_amps().is_negative();
+            log_error!(
+                "Update LED State",
+                led_tx.send(LedCommand::EnergyBar(amps as u8, neg)).await
+            );
+            LedCommand::SocBar(*chademo.soc()) // Assuming SocBar should be sent in this case
+        }
     };
-    log_error!("Update LED SoC", led_tx.send(LedCommand::SocBar(soc)).await);
 
-    // convert from float amps to percentage vs max amps const
-    let mut amps: u32 = (amps.abs() as u8).min(MAX_AMPS) as u32 * 100;
-    if amps != 0 {
-        amps /= MAX_AMPS as u32;
-    };
-    log_error!(
-        "Update LED Energy",
-        led_tx.send(LedCommand::EnergyBar(amps as u8, neg)).await
-    );
+    // Send the LED state using a single call to log_error!
+    log_error!("Update LED State", led_tx.send(led_state).await);
 }
 
 #[cfg(test)]

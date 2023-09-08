@@ -1,13 +1,13 @@
 use super::{
-    can::*, cmd_list, fans::*, pwm::Pwm, PreCharger, PreCommand, BB_PWM_CHIP, BB_PWM_NUMBER,
-    PREDATA,
+    can::*, fans::*, pwm::Pwm, PreCharger, PreCommand, BB_PWM_CHIP, BB_PWM_NUMBER, PREDATA,
 };
 use crate::{
     chademo::state::{pin_init_out_high, PREACPIN},
     data_io::mqtt::CHADEMO_DATA,
     error::IndraError,
+    global_state::OperationMode,
     log_error,
-    pre_charger::PreState,
+    pre_charger::{cmd_list_outputs, cmd_list_setpoints, PreState},
     statics::PreRxMutex,
 };
 use std::time::Duration;
@@ -22,66 +22,63 @@ pub async fn init(pre_rx_m: PreRxMutex) -> Result<(), IndraError> {
     let mut can_socket =
         tokio_socketcan::CANSocket::open("can0").map_err(|e| IndraError::CanOpen(e))?;
     let predata = PREDATA.clone();
+    predata.lock().await.set_state(PreState::Init);
     let pwm = Pwm::new(BB_PWM_CHIP, BB_PWM_NUMBER, 1000).unwrap(); // number depends on chip, etc.
     let mut fan = Fan::new(pwm);
     fan.update(10.0); // turn fans off
     let pre_ac_contactor: Pin = pin_init_out_high(PREACPIN)?;
-
     sleep(t100ms * 10).await;
 
-    let result = initalise_pre(t100ms, &mut can_socket, &mut pre).await;
-    log::warn!("Init {result:?}");
+    initalise_pre(t100ms, &mut can_socket, &mut pre).await?;
 
-    pre.set_state(PreState::Init);
-
-    {
-        *predata.lock().await = pre; // copy data
-    }
-
-    enabled_wait(t100ms, &mut can_socket, &mut pre).await;
-
-    pre.set_state(PreState::Online);
-
-    let cmd_list = cmd_list();
+    let setpoints = cmd_list_setpoints();
+    let outputs = cmd_list_outputs();
     let mut pre_rx = pre_rx_m.lock().await;
-
+    let mut counter = 0;
     loop {
+        counter += 1;
         let instant = Instant::now();
+        let cmd_list = if counter % 2 == 0 { setpoints } else { outputs };
         read_pre(&cmd_list, &mut can_socket, t100ms, &mut pre).await;
         update_fan(&mut pre, &mut fan);
 
-        while instant.elapsed().as_millis().le(&70) {
-            while let Ok(Some(cmd)) = timeout(Duration::from_millis(10), pre_rx.recv()).await {
-                log::debug!("Received {cmd:?}");
-                if !matches!(cmd, PreCommand::Shutdown) {
-                    write_pre(cmd, &mut can_socket, t100ms / 10, &mut pre).await;
-                }
-                let mut data = predata.lock().await;
-
-                fan.remove().await;
-                data.set_state(PreState::Offline);
-                data.fan_duty(1);
+        if let Ok(cmd) = pre_rx.try_recv() {
+            log::debug!("Received {cmd:?}");
+            if !matches!(cmd, PreCommand::Shutdown) {
+                write_pre(cmd, &mut can_socket, t100ms / 10, &mut pre).await;
+            } else {
+                fan.stop();
+                pre.set_state(PreState::Offline);
+                pre.fan_duty(1);
             }
+            // let mut data = predata.lock().await;
         }
 
         // update MQTT struct
         {
             *predata.lock().await = pre;
         }
-        if let Ok(mut data) = CHADEMO_DATA.try_lock() {
+        if let Ok(mut data) = CHADEMO_DATA.try_write() {
             data.from_pre(pre);
+            if matches!(pre.state, PreState::Offline) {
+                pre_ac_contactor
+                    .set_value(0)
+                    .map_err(|e| IndraError::PinAccess(e))?;
+                log::warn!("Pre AC contactor opened");
+                return Ok(());
+            };
         };
-        if matches!(PreState::Offline, data.state) {
-            pre_ac_contactor
-                .set_value(0)
-                .map_err(|e| IndraError::PinAccess(e))?;
-            log::warn!("Pre AC contactor opened");
-            return Ok(());
-        };
-        println!("{}", pre);
-        if instant.elapsed().as_millis().gt(&100) {
+
+        // 1 sec Pre stats
+        if counter > 10 {
+            println!("{}", pre);
+            counter = 0;
+        }
+        if instant.elapsed().as_millis().gt(&99) {
             log::warn!("loop time > 100ms");
             dbg!(instant.elapsed().as_millis());
+        } else {
+            sleep(t100ms - instant.elapsed()).await
         }
     }
 }

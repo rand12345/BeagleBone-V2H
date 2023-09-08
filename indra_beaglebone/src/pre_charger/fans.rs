@@ -58,13 +58,8 @@ impl Fan {
         }
     }
     pub fn stop(&mut self) {
-        let _ = self.pwm.set_duty(1);
+        let _ = self.pwm.set_duty(0);
         log_error!("PWM disable", self.pwm.enable(false));
-    }
-    #[allow(dead_code)]
-    pub fn remove(&mut self) {
-        log_error!("PWM disable", self.pwm.enable(false));
-        log_error!("PWM unexport", self.pwm.unexport());
     }
     pub fn update(&mut self, temp: f32) -> u8 {
         let elapsed = self.duty.elapsed(Duration::from_secs(20));

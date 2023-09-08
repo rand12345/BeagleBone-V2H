@@ -63,7 +63,7 @@ pub struct X102 {
     pub target_battery_voltage: f32,
     /// Charging current request
     pub charging_current_request: u8,
-    pub faults: X102Faults,
+    faults: X102Faults,
     pub status: X102Status,
     /// state of charge of battery
     pub state_of_charge: u8,
@@ -72,11 +72,26 @@ impl X102 {
     pub fn fault(&self) -> bool {
         self.faults.into()
     }
-    pub fn can_charge(&self) -> bool {
+    pub fn contactors_closed(&self) -> bool {
+        !self.status.status_vehicle
+    }
+    pub fn can_discharge(&self) -> bool {
+        self.status.status_discharge_compatible
+    }
+    /// May mirror kline 102.5.0
+    pub fn car_ready(&self) -> bool {
+        self.status.status_vehicle_charging
+    }
+    pub fn can_close_contactors(&self) -> bool {
         !(self.status.status_normal_stop_request
-            | self.status.status_vehicle
             | self.status.status_charging_system
             | self.status.status_vehicle_shifter_position)
+            && self.status.status_vehicle
+            && self.status.status_vehicle_charging
+            && self.target_battery_voltage > 0.0
+    }
+    pub fn stop(&self) -> bool {
+        false
     }
 }
 
@@ -94,12 +109,28 @@ impl From<&CANFrame> for X102 {
     }
 }
 
+/// 1 = error, 0 = normal
 #[derive(Debug, Default, Copy, Clone)]
 pub struct X102Faults {
+    /// 102.4.4
+    /// - Battery voltage deviation error
+    /// - Flag indicating the result of judgment regarding the difference between measured voltage of on- board battery and “Present output voltage” measured by the charger.
     pub fault_battery_voltage_deviation: bool,
+    /// 102.4.3 - High battery temperature
     pub fault_high_battery_temperature: bool,
+    /// 102.4.2
+    /// - Battery current deviation error
+    /// — If the EVSE’s output exceeds the maximum charge current continually, the flag shall be changed to 1. The overcurrent threshold shall be set at 10 A (absolute value) or more, and the time threshold shall be set at 5sec or more
+    /// — If the EVSE’s input exceeds the range of the maximum discharge current continually, the flag shall be changed to 1. The overcurrent threshold shall be set at 10 A (absolute value) or more and the time threshold shall be set at 5sec or more
+    /// — The vehicle charge/discharge enabled and switch (k) shall be turned off at the same time
+    /// - Regardless of the condition of the opto-coupler (j), if this flag is 1, it shall be considered as the vehicle’s request to stop charging/discharging, and the EVSE shall move to the stop control.
     pub fault_battery_current_deviation: bool,
+    /// 102.4.1
+    /// - Status flag indicating the voltage status of on-board battery.
     pub fault_battery_undervoltage: bool,
+    /// 102.4.0
+    /// - Status flag indicating the voltage status of on-board battery
+    /// Regardless of opto-coupler (j) status, the EVSE shall regard this flag as charging termination order from the vehicle if it is equal to 1, and stop charging.
     pub fault_battery_overvoltage: bool,
 }
 impl Into<bool> for X102Faults {
@@ -126,39 +157,70 @@ impl From<u8> for X102Faults {
 
 #[derive(Debug, Default, Copy, Clone)]
 pub struct X102Status {
+    /// 102.5.7
+    /// - The flag indicating the vehicle is compatible with discharging
+    /// The value shall be set from the first time of the CAN communication, and it shall not be updated. However, if it is inevitable to reset the value, e.g. for battery protection, the value is updated from 1 to 0 and only discharging shall be prohibited. — The value indicates the compatibility with the V2H charge/discharge mode (compatible: 1, incompatible: 0)
+    pub status_discharge_compatible: bool,
     /// 102.5.4
+    /// - Flag used by the vehicle to instruct the EVSE to stop charging control. -
+    /// This value shall be updated until initial value of “Charging current request” is set. Do not update this value after initial value transmission.
     pub status_normal_stop_request: bool,
     /// 102.5.3
+    ///  - Flag indicating the OPEN/CLOSE status of EV contactors and the result of vehicle contactor welding detection.
+    /// Set the flag to 0 when the vehicle relay is closed, and set as 1 after the termination of welding detection. - Set the flag to 0 when the vehicle relay is closed, and set as 1 after the termination of welding detection.
     pub status_vehicle: bool, // true EV contactors open
     /// 102.5.2
+    /// - Flag indicating the presence of the malfunction originated in the vehicle among the malfunctions detected by the vehicle.
+    /// Update as needed, and hold “1” after the malfunction is determined. — Regardless of the condition of the opto-coupler (j), if this flag is 0, it shall be considered as the vehicle's request to stop charging/discharging, and the EVSE shall move to the stop control.
     pub status_charging_system: bool, // false = ok / true = fault
     /// 102.5.1
+    /// - Status flag indicating the shift lever position
+    /// — Set this flag to 0 when the shift lever is in “parking” position. Set to 1 when it is in other position. — Turn the switch (k) OFF if the shift position is changed except “parking” during charging.
     pub status_vehicle_shifter_position: bool, // false = ok
     /// 102.5.0
+    /// - Flag indicating charging/dischar ging permission status of the vehicle.
+    /// Charging/discharging enabled: 1, charging/discharging disabled: 0
+    /// — After CAN communication starts and the vehicle sends the EVSE data required for prior to a start of charging/discharging, change the flag 0 to 1. — Change this flag 1 to 0 when the vehicle sends the “charging/discharging stop” notification to the EVSE. Regardless of the condition of the opto-coupler (j), if this flag is 0, it shall be considered as the vehicle's request to stop charging/discharging, and the EVSE shall move to the stop control.— When this flag is 0, the insulation test shall not be conducted.
     pub status_vehicle_charging: bool,
 }
 impl std::fmt::Display for X102Status {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(
             f,
-            "102.5.0:{} 1:{} 2:{} 3:{} 4:{}",
+            "102.5.0:{} 1:{} 2:{} 3:{} 4:{} 7:{}",
             self.status_vehicle_charging as u8,
             self.status_vehicle_shifter_position as u8,
             self.status_charging_system as u8,
             self.status_vehicle as u8,
-            self.status_normal_stop_request as u8
+            self.status_normal_stop_request as u8,
+            self.status_discharge_compatible as u8,
         )
     }
 }
 impl From<u8> for X102Status {
     fn from(val: u8) -> Self {
         Self {
+            status_discharge_compatible: get_bit(val, 7),
             status_normal_stop_request: get_bit(val, 4),
             status_vehicle: get_bit(val, 3),
             status_charging_system: get_bit(val, 2),
             status_vehicle_shifter_position: get_bit(val, 1),
             status_vehicle_charging: get_bit(val, 0),
         }
+    }
+}
+impl Into<u8> for X102Status {
+    fn into(self) -> u8 {
+        let mut result: u8 = 0;
+
+        result |= (self.status_discharge_compatible as u8) << 7;
+        result |= (self.status_normal_stop_request as u8) << 4;
+        result |= (self.status_vehicle as u8) << 3;
+        result |= (self.status_charging_system as u8) << 2;
+        result |= (self.status_vehicle_shifter_position as u8) << 1;
+        result |= self.status_vehicle_charging as u8;
+
+        result
     }
 }
 
@@ -553,14 +615,26 @@ mod test {
     fn x102_test() {
         let frame = CANFrame::new(
             0x102,
+            [0x02, 0x9A, 0x01, 0x00, 0x00, 0xC8, 0x56, 0x00].as_slice(),
+            false,
+            false,
+        )
+        .unwrap();
+        let x102: X102 = X102::from(&frame);
+        println!("{}", x102.status);
+        assert!(!x102.contactors_closed());
+
+        let frame = CANFrame::new(
+            0x102,
             [0x02, 0x9A, 0x01, 0x00, 0x00, 0xC9, 0x56, 0x00].as_slice(),
             false,
             false,
         )
         .unwrap();
         let x102: X102 = X102::from(&frame);
-        assert!(x102.status.status_vehicle);
-        assert!(!x102.can_charge());
+        assert!(x102.can_close_contactors());
+        println!("{}", x102.status);
+
         let frame = CANFrame::new(
             0x102,
             [0x02, 0x9A, 0x01, 0x00, 0x00, 0xC1, 0x56, 0x00].as_slice(),
@@ -569,8 +643,7 @@ mod test {
         )
         .unwrap();
         let x102 = X102::from(&frame);
-        assert!(!x102.status.status_vehicle); // start matching voltage
-        assert!(x102.can_charge());
+        assert!(x102.contactors_closed());
     }
     /*
             [0x02, 0x9A, 0x01, 0x00, 0x00, 0xC9, 0x56, 0x00]    <x102>

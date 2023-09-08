@@ -23,6 +23,8 @@ pub enum IndraError {
     Serialise(serde_json::Error),
     Deserialise(serde_json::Error),
     Timeout,
+    CanTxError((std::io::Error, u8)),
+    MeterOffline,
     // FileAccess(_),
     // I2cWriteError,
 }
@@ -51,7 +53,8 @@ impl std::fmt::Display for IndraError {
             Serialise(e) => write!(f, "json serialise {e:?} "),
             Deserialise(e) => write!(f, "json deserialise {e:?} "),
             Timeout => write!(f, "Timeout"),
-            // I2cWriteError => write!(f, "I2c write failed"),
+            CanTxError((e, n)) => write!(f, "CanTxError #{n} {e:?}"),
+            MeterOffline => write!(f, "Meter is offline"),
         }
     }
 }

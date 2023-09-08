@@ -9,14 +9,14 @@ use serde::Serialize;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::time::Duration;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::sleep;
 
 use super::config::MqttConfig;
 
 lazy_static! {
-    pub static ref CHADEMO_DATA: Arc<Mutex<MqttChademo>> =
-        Arc::new(Mutex::new(MqttChademo::default()));
+    pub static ref CHADEMO_DATA: Arc<RwLock<MqttChademo>> =
+        Arc::new(RwLock::new(MqttChademo::default()));
 }
 
 #[derive(Clone, Copy, Serialize, Default, Debug)]
@@ -41,7 +41,7 @@ impl MqttChademo {
         self.fan = pre.get_fan_percentage();
         self
     }
-    pub fn from_chademo(&mut self, chademo: Chademo) -> &mut Self {
+    pub fn from_chademo(&mut self, chademo: &Chademo) -> &mut Self {
         self.soc = *chademo.soc() as f32;
         self.state = *chademo.state();
         self.requested_amps = chademo.requested_charging_amps();
@@ -87,7 +87,7 @@ pub async fn mqtt_task(config: MqttConfig) -> Result<(), IndraError> {
         sleep(Duration::from_secs(interval.into())).await;
 
         // send basic data as json string
-        let msg = match serde_json::to_string(&*CHADEMO_DATA.lock().await) {
+        let msg = match serde_json::to_string(&*CHADEMO_DATA.read().await) {
             Ok(d) => d,
             Err(e) => {
                 log::error!("CHAdeMO Ser {e}");

@@ -1,7 +1,7 @@
-use super::{PreCharger, Register};
+use super::{PreCharger, PreState, Register, PREDATA};
 use crate::{error::IndraError, pre_charger::Command};
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::time::{sleep, timeout};
 use tokio_socketcan::{CANFrame, CANSocket};
 
 #[inline]
@@ -58,6 +58,26 @@ pub async fn initalise_pre(
     can_socket: &mut tokio_socketcan::CANSocket,
     pre: &mut PreCharger,
 ) -> Result<(), IndraError> {
+    if timeout(t100ms * 50, initalise(t100ms, can_socket, pre))
+        .await
+        .map_err(|_| IndraError::Timeout)?
+        .is_ok()
+    {
+        timeout(t100ms * 150, enabled_wait(t100ms, can_socket, pre))
+            .await
+            .map_err(|_| IndraError::Timeout)?;
+
+        pre.set_state(PreState::Online);
+        *PREDATA.lock().await = *pre; // copy data
+    }
+    Ok(())
+}
+
+async fn initalise(
+    t100ms: Duration,
+    can_socket: &mut tokio_socketcan::CANSocket,
+    pre: &mut PreCharger,
+) -> Result<(), IndraError> {
     for (idx, frame) in init_frames().into_iter().enumerate() {
         let mut fail_count = 0u8;
         loop {
@@ -92,6 +112,7 @@ pub async fn initalise_pre(
             }
         }
     }
+
     Ok(())
 }
 
@@ -106,7 +127,7 @@ pub async fn enabled_wait(
             sleep(t100ms).await;
             if let Ok(rx) = can_send_recv(can_socket, status_frame(), t100ms).await {
                 if pre.from_slice(rx.data()).is_ok() {
-                    // log::info!("Status ok");
+                    log::info!("Status ok");
                     break;
                 };
             }
@@ -118,6 +139,7 @@ pub async fn enabled_wait(
             }
         }
     }
+    log::info!("Pre enabled");
 }
 
 fn status_frame() -> CANFrame {

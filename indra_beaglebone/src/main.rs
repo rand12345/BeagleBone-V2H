@@ -5,10 +5,13 @@ use chademo::{
     ev_connect,
     state::{self},
 };
-use data_io::{config::APP_CONFIG, meter, mqtt, panel};
+use data_io::{config::APP_CONFIG, db::Database, meter, mqtt, panel};
 use global_state::OperationMode;
 use statics::OPERATIONAL_MODE;
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::{
+    signal::unix::{signal, SignalKind},
+    sync::OnceCell,
+};
 
 mod api;
 mod chademo;
@@ -19,10 +22,12 @@ mod macros;
 mod pre_charger;
 mod scheduler;
 
-const MAX_SOC: u8 = 100;
-const MIN_SOC: u8 = 30;
+const MAX_SOC: u8 = 90;
+const MIN_SOC: u8 = 31;
 const MAX_AMPS: u8 = 16;
 const METER_BIAS: f32 = 0.0;
+
+static POOL: OnceCell<Database> = OnceCell::const_new();
 
 /**
  *
@@ -53,6 +58,10 @@ async fn main() -> Result<(), &'static str> {
     #[cfg(not(feature = "logging-verbose"))]
     simple_logger::init_with_level(log::Level::Debug).expect("Logger init failed");
 
+    POOL.get_or_try_init(|| async { Database::new().await })
+        .await
+        .expect("SQLx error");
+
     let (led_tx, led_rx) = statics::led_channel();
     let (mode_tx, mode_rx) = statics::chademo_channel();
     let (events_tx, events_rx) = statics::events_channel();
@@ -66,7 +75,7 @@ async fn main() -> Result<(), &'static str> {
     tokio::spawn(panel::panel_event_listener(led_rx, mode_tx.clone()));
     tokio::spawn(scheduler::init(events_rx, mode_tx.clone()));
     tokio::spawn(api::run(events_tx, mode_tx.clone()));
-    tokio::spawn(data_io::db::init(10));
+    tokio::spawn(data_io::db::init(10_000));
     tokio::spawn(mqtt::mqtt_task(app_config.mqtt.clone()));
     tokio::time::sleep(std::time::Duration::from_secs(1)).await;
 
@@ -74,9 +83,14 @@ async fn main() -> Result<(), &'static str> {
         signal(SignalKind::interrupt()).expect("Failed to create Ctrl-C signal handler");
     let eb = mode_tx.clone();
     tokio::spawn(async move {
-        ctrl_c.recv().await;
-        log::warn!("CTRL-C caught - sending Quit instruction");
-        let _ = eb.send(OperationMode::Quit).await;
+        loop {
+            ctrl_c.recv().await;
+            log::warn!("CTRL-C caught - sending Quit instruction");
+            let _ = eb.send(OperationMode::Quit).await;
+            ctrl_c.recv().await;
+            log::warn!("CTRL-C caught again - forcing exit");
+            std::process::exit(1)
+        }
     });
 
     // Final loop
@@ -93,7 +107,7 @@ pub mod statics {
 
     use crate::{
         chademo::state::Chademo, //ChargerState,State
-        data_io::panel::LedCommand,
+        data_io::{db::ChademoDbRow, panel::LedCommand},
         global_state::OperationMode,
         pre_charger::PreCommand,
         scheduler::Events,
@@ -134,6 +148,10 @@ pub mod statics {
     pub fn events_channel() -> EventsChannel {
         mpsc::channel::<Events>(100)
     }
+
+    // pub fn mpsc_channel<T>(buf: usize) -> Channel<T> {
+    //     mpsc::channel::<T>(buf)
+    // }
 
     pub fn mutex<T>(i: T) -> Arc<Mutex<T>> {
         Arc::new(Mutex::new(i))

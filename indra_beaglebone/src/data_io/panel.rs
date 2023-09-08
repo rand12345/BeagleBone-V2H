@@ -70,22 +70,30 @@ async fn monitor_pin(pin: Pin, mode_tx: ChademoTx) -> Result<(), sysfs_gpio::Err
     let mut gpio_events = pin.get_value_stream()?;
     while let Some(evt) = gpio_events.next().await {
         let val = evt.unwrap();
-        // let mut opm = OPERATIONAL_MODE.lock().await;
+        let opm = OPERATIONAL_MODE.lock().await;
         match (pin.get_pin_num(), val) {
             (BOOSTPIN, 0) => {
                 // send state update to toggle charge only
                 let params = ChargeParameters::default();
-                log_error!(
-                    "Boost button pressed",
-                    mode_tx.send(OperationMode::Charge(params)).await
-                );
+                let new_mode = match *opm {
+                    OperationMode::V2h | OperationMode::Idle | OperationMode::Uninitalised => {
+                        OperationMode::Charge(params)
+                    }
+                    OperationMode::Charge(_) | OperationMode::Discharge(_) => OperationMode::Idle,
+                    _ => continue,
+                };
+                log_error!("Boost button pressed", mode_tx.send(new_mode).await);
             }
             (ONOFFPIN, 0) => {
                 // send state update to toggle Stage 1 or shutdown only
-                log_error!(
-                    "OnOff button pressed",
-                    mode_tx.send(OperationMode::V2h).await
-                );
+                let new_mode = match *opm {
+                    OperationMode::Charge(_)
+                    | OperationMode::Idle
+                    | OperationMode::Uninitalised => OperationMode::V2h,
+                    OperationMode::V2h => OperationMode::Idle,
+                    _ => continue,
+                };
+                log_error!("OnOff button pressed", mode_tx.send(new_mode).await);
             }
             _ => (),
         };

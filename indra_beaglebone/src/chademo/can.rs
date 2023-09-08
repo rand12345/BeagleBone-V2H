@@ -36,14 +36,16 @@ pub async fn recv_send(
             }
         };
     }
+
+    sleep(Duration::from_millis(10)).await;
     for frame in chademo.tx_frames() {
         if debug {
             log::info!(">> {:02x}: {:02x?}", frame.id(), frame.data());
         }
         can.write_frame(frame)
-            .unwrap()
-            .await
             .map_err(|_| IndraError::CanTx(1))?
+            .await
+            .map_err(|e| IndraError::CanTxError((e, 1)))?
     }
     Ok(())
 }

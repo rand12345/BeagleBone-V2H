@@ -4,7 +4,9 @@ use crate::error::IndraError;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::RwLock;
 use tokio::time::timeout;
+use tokio::time::Instant;
 use tokio::{
     net::TcpStream,
     sync::Mutex,
@@ -12,7 +14,7 @@ use tokio::{
 };
 
 lazy_static::lazy_static! {
-    pub static ref METER: Arc<Mutex<f32>> = Arc::new(Mutex::new(0f32));
+    pub static ref METER: Arc<RwLock<Option<f32>>> = Arc::new(RwLock::new(Some(0f32)));
 }
 
 pub async fn meter(config: MeterConfig) -> Result<(), IndraError> {
@@ -27,42 +29,61 @@ pub async fn meter(config: MeterConfig) -> Result<(), IndraError> {
         socket_addr.ip(),
         socket_addr.port()
     );
-    let mut stream = TcpStream::connect(socket_addr)
-        .await
-        .map_err(|e| IndraError::SocketConnectError(e))?;
-    let (mut rx, mut tx) = stream.split();
-
-    // Raw modbus params for SDM230 @ 1hz
-    let device_id = 1;
-    let function_code = 0x04; // Read Holding Registers
-    let starting_address = 0x0c;
-    let quantity = 2;
-
-    let request = energy_modbus_rtu_request(device_id, function_code, starting_address, quantity);
-    log::info!("SDM230 modbus PDU: {request:02x?}");
-
     loop {
-        let mut buf = [0u8; 24];
-        sleep(Duration::from_millis(1000)).await;
-        if let Err(e) = tx.write(&request).await {
-            log::error!("{e:?}")
-        }
+        let mut stream = TcpStream::connect(socket_addr)
+            .await
+            .map_err(|e| IndraError::SocketConnectError(e))?;
+        let (mut rx, mut tx) = stream.split();
 
-        let val = match timeout(Duration::from_millis(500), rx.read(&mut buf)).await {
-            Ok(Ok(_)) => f32::from_be_bytes(buf[3..=6].try_into().unwrap_or_default()),
-            Err(e) => {
-                log::error!("Meter TCP read error {e:?}");
-                continue;
+        // Raw modbus params for SDM230 @ 1hz
+        let device_id = 1;
+        let function_code = 0x04; // Read Holding Registers
+        let starting_address = 0x0c;
+        let quantity = 2;
+
+        let request =
+            energy_modbus_rtu_request(device_id, function_code, starting_address, quantity);
+        log::info!("SDM230 modbus PDU: {request:02x?}");
+        let mut val = 0.1f32;
+
+        'inner: loop {
+            let mut buf = [0u8; 24];
+            let instant = Instant::now();
+            if let Err(e) = tx.write(&request).await {
+                log::error!("TCP write error {e:?}");
+                break 'inner;
             }
-            _ => continue,
-        };
-        // log::info!("Meter value {} (-ve is export to load)", val);
-        {
-            *METER.clone().lock().await = val
+
+            match timeout(Duration::from_millis(400), rx.read(&mut buf)).await {
+                Ok(Ok(_)) => {
+                    // Strange blank meter readings
+                    if buf[3..=6] != [0, 0, 0, 0] {
+                        val =
+                            f32::from_be_bytes(buf[3..=6].try_into().unwrap_or(val.to_be_bytes()));
+                    }
+                }
+                Err(e) => {
+                    log::error!("Meter TCP timeout {e:?}");
+                    break 'inner;
+                }
+                _ => {
+                    log::error!("Meter TCP read error");
+                    break 'inner;
+                }
+            };
+            log::info!("Meter value {} ", val);
+            {
+                *METER.clone().write().await = Some(val);
+            }
+            {
+                CHADEMO_DATA.clone().write().await.from_meter(val);
+            }
+            if instant.elapsed() < Duration::from_millis(500) {
+                sleep(Duration::from_millis(500) - instant.elapsed()).await
+            }
         }
-        {
-            CHADEMO_DATA.clone().lock().await.from_meter(val);
-        }
+        *METER.clone().write().await = None;
+        drop(stream)
     }
 }
 

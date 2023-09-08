@@ -106,14 +106,19 @@ impl Chademo {
             x200: X200::default(),
             //EVSE encode
             x109: X109::new(2, true),
-            x108: X108::new(MAX_AMPS, 500, false, 435).into(),
+            x108: X108::new(MAX_AMPS, 500, true, 435).into(),
             x208: X208::new(0, 500, MAX_AMPS, 250),
             x209: X209::new(2, 0),
             state: OperationMode::Uninitalised,
             amps: 0,
         }
     }
-
+    /// Flag to EV that charge has been cancelled
+    /// Sets 109.5.5 high
+    pub fn request_stop_charge(&mut self) {
+        // change status of x109
+        self.x109.status.status_charger_stop_control = true;
+    }
     /// Reports Pre current to EV, both charge and discharge
     pub fn update_amps(&mut self, amps: impl Into<i16>) {
         self.amps = amps.into();
@@ -205,7 +210,7 @@ impl Chademo {
     }
 
     pub fn fault(&self) -> bool {
-        self.x102.faults.into()
+        self.x102.fault().into()
     }
 
     pub fn target_voltage(&self) -> &f32 {
@@ -214,10 +219,23 @@ impl Chademo {
 
     // all below this needs verifying
     pub fn can_charge(&self) -> bool {
-        self.x102.can_charge()
+        self.x102.can_close_contactors()
+    }
+
+    // if kline and the other line bool true
+
+    pub fn k_line_check(&mut self) -> Result<bool, IndraError> {
+        Ok(self
+            .pins
+            .k
+            .get_value()
+            .map_err(|e| IndraError::PinAccess(e))?
+            == 0
+            && self.x102.can_close_contactors())
     }
     pub fn charge_start(&mut self) {
-        self.status_charger_stop_control(false);
+        self.x109.status.status_charger_stop_control = false;
+        self.x109.status.status_station = true;
         // self.status_station_enabled(true);
         // self.plug_lock(true);
         self.x109.remaining_charging_time_10s_bit = 255;
@@ -235,13 +253,13 @@ impl Chademo {
         self.x109.status.fault_charging_system_malfunction = false;
         self.x109.status.fault_station_malfunction = false;
     }
-    pub fn status_charger_stop_control(&mut self, state: bool) {
-        self.x109.status.status_charger_stop_control = state
-    }
+    // pub fn status_charger_stop_control(&mut self, state: bool) {
+    //     self.x109.status.status_charger_stop_control = state
+    // }
 
-    pub fn status_station_enabled(&mut self, state: bool) {
-        self.x109.status.status_station = state;
-    }
+    // pub fn status_station_enabled(&mut self, state: bool) {
+    //     self.x109.status.status_station = state;
+    // }
     pub fn plug_lock(&mut self, state: bool) -> Result<(), IndraError> {
         self.pins
             .pluglock
@@ -261,6 +279,22 @@ impl Chademo {
     }
     pub fn charging_stop_control_release(&mut self) {
         self.x109.status.status_charger_stop_control = true
+    }
+    pub fn close_contactors(&mut self) -> Result<(), IndraError> {
+        log::info!("Contactors closing");
+        self.pins()
+            .c1
+            .set_value(1)
+            .map_err(|e| IndraError::PinAccess(e))?;
+        self.pins()
+            .c2
+            .set_value(1)
+            .map_err(|e| IndraError::PinAccess(e))?;
+
+        print!("\x07");
+        //109.5.5
+        self.charging_stop_control_set();
+        Ok(())
     }
 }
 

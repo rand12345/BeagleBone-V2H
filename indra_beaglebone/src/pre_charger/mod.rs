@@ -299,17 +299,31 @@ impl From<u8> for Command {
         }
     }
 }
-pub fn cmd_list() -> [u16; 10] {
+pub fn cmd_list_setpoints() -> [u16; 5] {
+    [
+        // u16::from(Register::Temp),
+        // u16::from(Register::AcA),
+        // u16::from(Register::DcOutputV),
+        u16::from(Register::DcBusV),
+        // u16::from(Register::DcOutputA),
+        u16::from(Register::DcBusMaxVsetpoint),
+        u16::from(Register::DcBusMaxAsetpoint),
+        // u16::from(Register::Enabled),
+        u16::from(Register::Status),
+        u16::from(Register::Ping),
+    ]
+}
+pub fn cmd_list_outputs() -> [u16; 5] {
     [
         u16::from(Register::Temp),
         u16::from(Register::AcA),
         u16::from(Register::DcOutputV),
-        u16::from(Register::DcBusV),
+        // u16::from(Register::DcBusV),
         u16::from(Register::DcOutputA),
-        u16::from(Register::DcBusMaxVsetpoint),
-        u16::from(Register::DcBusMaxAsetpoint),
+        // u16::from(Register::DcBusMaxVsetpoint),
+        // u16::from(Register::DcBusMaxAsetpoint),
         u16::from(Register::Enabled),
-        u16::from(Register::Status),
-        u16::from(Register::Ping),
+        // u16::from(Register::Status),
+        // u16::from(Register::Ping),
     ]
 }
