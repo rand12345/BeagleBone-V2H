@@ -509,7 +509,9 @@ async fn amps_meter_profiler(
     let meter = if let Some(val) = *METER.read().await {
         val + METER_BIAS
     } else {
-        return Err(IndraError::MeterOffline);
+        // return Err(IndraError::MeterOffline);
+        log::error!("Meter offline");
+        *feedback
     };
 
     if *feedback == meter && meter.is_normal() {
