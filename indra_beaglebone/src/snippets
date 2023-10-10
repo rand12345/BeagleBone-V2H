@@ -1,0 +1,137 @@
+/*
+
+// ADC attempt
+
+use std::io;
+    use std::io::prelude::*;
+
+    use spidev::{SpiModeFlags, Spidev, SpidevOptions, SpidevTransfer};
+
+    fn create_spi() -> io::Result<Spidev> {
+        let mut spi = Spidev::open("/dev/spidev1.1")?;
+        let options = SpidevOptions::new()
+            .bits_per_word(16)
+            .max_speed_hz(100_000)
+            .mode(SpiModeFlags::SPI_MODE_2)
+            .build();
+        spi.configure(&options)?;
+        Ok(spi)
+    }
+
+    /// perform half duplex operations using Read and Write traits
+    fn half_duplex(spi: &mut Spidev) -> io::Result<()> {
+        let mut rx_buf = [0_u8; 10];
+        spi.write(&[0x01, 0x02, 0x03])?;
+        spi.read(&mut rx_buf)?;
+        println!("{:?}", rx_buf);
+        Ok(())
+    }
+
+    /// Perform full duplex operations using Ioctl
+    fn full_duplex(spi: &mut Spidev, tx_buf: &mut [u8], rx_buf: &mut [u8]) -> io::Result<()> {
+        // "write" transfers are also reads at the same time with
+        // the read having the same length as the write
+        // let tx_buf = [0x01, 0x02, 0x03];
+        // let mut rx_buf = [0; 3];
+        {
+            let mut transfer = SpidevTransfer::read_write(&tx_buf, rx_buf);
+            spi.transfer(&mut transfer)?;
+        }
+        // print!(
+        //     "transfered {:08b}{:08b} -> {:08b}{:08b}",
+        //     tx_buf[0], tx_buf[1], rx_buf[0], rx_buf[1]
+        // );
+        Ok(())
+    }
+    fn bit_clear(n: &mut u16, bit_index: usize) {
+        if bit_index < 16 {
+            let mask = 1 << bit_index;
+            *n &= !mask;
+        }
+    }
+    fn bit_set(n: &mut u16, bit_index: usize, value: bool) {
+        if bit_index < 16 {
+            let mask = 1 << bit_index;
+            if value {
+                *n |= mask;
+            } else {
+                *n &= !mask;
+            }
+        }
+    }
+    async fn read_adc(mut spi: &mut Spidev, channels: &mut [u16; 8]) {
+        let mut tx_buf = [0u8; 2];
+        let mut rx_buf = [0u8; 2];
+        full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+        // println!(
+        //     "{:016b} {:?} ",
+        //     u16::from_be_bytes(rx_buf),
+        //     decode_u16(u16::from_be_bytes(rx_buf))
+        // );
+        for i in rx_buf {
+            print!("{:08b} ", i)
+        }
+        println!("")
+    }
+
+    let mut spi = create_spi().unwrap();
+    let mut channels = [0u16; 8];
+    //                   fedcba9876543210
+    const CONTR: u16 = 0b1001110000011000;
+    const SEQUR: u16 = 0b1111111111100000;
+    const REG01: u16 = 0b1010000000000000;
+    const REG02: u16 = 0b1100000000000000;
+
+    //WRITE TO CONTROL REGISTER TO SELECT THE FINAL CHANNEL IN THE CONSECUTIVE SEQUENCE, SET Seq1 = 1 AND Seq2 = 0. SELECT OUTPUT CODING FOR SEQUENCE
+    let mut tx_buf = [0u8; 2];
+    let mut rx_buf = [0u8; 2];
+    // loop {
+    //     spi.write(&[0xaa, 0x55]).unwrap();
+    // }
+    tx_buf = REG01.to_be_bytes();
+    full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    tx_buf = REG02.to_be_bytes();
+    full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    tx_buf = CONTR.to_be_bytes();
+    full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    tx_buf = SEQUR.to_be_bytes();
+    full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    let mut tx_buf = [0u8; 2];
+    let mut rx_buf = [0u8; 2];
+    loop {
+        // // read_adc(&mut spi, &mut channels).await;
+        // tx_buf = CONTR.to_be_bytes();
+        // full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+        // tokio::time::sleep(Duration::from_millis(10)).await;
+        // tx_buf = SEQUR.to_be_bytes();
+        // full_duplex(&mut spi, &mut tx_buf, &mut rx_buf).unwrap();
+        // tokio::time::sleep(Duration::from_millis(10)).await;
+
+        read_adc(&mut spi, &mut channels).await;
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        println!("-------------------------");
+    }
+
+    fn decode_u16(value: u16) -> (u8, i16) {
+        // Extracting the address bits (15, 14, 13) and the sign bit (12)
+        let address = (value >> 13) & 0b111;
+        let sign_bit = (value >> 12) & 0b1;
+
+        // Extracting the integer value from bits 11-0
+        let integer_value = value & 0b1111_1111_1111;
+
+        // Calculating the actual value based on the sign bit
+        let actual_value = if sign_bit == 1 {
+            -(integer_value as i16)
+        } else {
+            integer_value as i16
+        };
+
+        // Formatting the result as a string
+        (address as u8, actual_value)
+    }
+*/
